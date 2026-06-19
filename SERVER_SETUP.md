@@ -87,20 +87,41 @@ python scripts/diag_step0_mask.py --ckpt ./ckpts/Hy-VLA-RoboTwin --out step0_mas
 
 ## 5. 完整 RoboTwin eval(需要单独装 RoboTwin 2.0 模拟器)
 
-`robotwin_eval/` 只是适配器;真正跑要有 RoboTwin 2.0 仓库 + 其仿真依赖(SAPIEN 等),并把本仓库 symlink 进 `RoboTwin/policy/hy_vla`。
+`robotwin_eval/` 只是适配器;真正跑要有 RoboTwin 2.0 仓库 + 其仿真依赖(SAPIEN 等)。安装见官方 [RoboTwin-Platform/RoboTwin](https://github.com/RoboTwin-Platform/RoboTwin):
+```bash
+sudo apt install libvulkan1 mesa-vulkan-drivers vulkan-tools
+conda create -n RoboTwin python=3.10 -y
+conda activate RoboTwin
+git clone https://github.com/RoboTwin-Platform/RoboTwin.git
+cd RoboTwin
+bash script/_install.sh
+python script/update_embodiment_config_path.py
+bash script/_download_assets.sh
+```
 
-先修脚本 bug(循环里的 `local`):
+⚠️ eval 在 RoboTwin 这个 env(py3.10)里同进程跑仿真 + Hy-VLA,所以要把 Hy-VLA 装进它:
 ```bash
-sed -i 's/^\([[:space:]]*\)local /\1/' scripts/eval_robotwin_test.sh
+conda activate RoboTwin
+pip install -e /home/jovyan/code/wge/ttt_drift
+python -c "import hy_vla; print('hy_vla import OK')"
 ```
-再跑(按需改路径):
+
+原版回归(`local` bug 已在仓库内修好,无需 sed;`eval_robotwin_test.sh` 会自动把本仓库 symlink 进 `RoboTwin/policy/hy_vla`):
 ```bash
-ROBOTWIN_DIR=/path/to/RoboTwin \
-CKPT_PATH=$(pwd)/ckpts/Hy-VLA-RoboTwin \
-CUDA_VISIBLE_DEVICES=0 TEST_NUM=10 \
-bash scripts/eval_robotwin_test.sh        # 6 任务快速回归,日志落在 ./eval_logs/
+ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin CKPT_PATH=$(pwd)/ckpts/Hy-VLA-RoboTwin CUDA_VISIBLE_DEVICES=0 TEST_NUM=10 bash scripts/eval_robotwin_test.sh
 ```
-全量(50 任务 ×100 rollout,很慢):`bash scripts/eval_robotwin_full.sh`(同样的 env 变量)。
+全量(50 任务 ×100 rollout,很慢):`bash scripts/eval_robotwin_full.sh`(同样 env 变量)。
+
+## 5.5 step 1 真测 —— 扫 guidance_w 看 OOD 成功率
+
+核心实验。`guidance_w<1` 把动作往语言先验拉(velocity blend);用环境变量 `HYVLA_GUIDANCE_W` 逐档驱动:
+```bash
+ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin CKPT_PATH=$(pwd)/ckpts/Hy-VLA-RoboTwin CUDA_VISIBLE_DEVICES=0 TEST_NUM=20 TASK_CONFIG=demo_randomized bash scripts/eval_sweep_w.sh
+```
+- `TASK_CONFIG=demo_randomized` = OOD(强域随机化);再跑一遍 `TASK_CONFIG=demo_clean` 作 ID 对照。
+- 扫 `W_GRID="1.0 0.75 0.5 0.25"`(默认),日志落在 `eval_logs/<task_config>/w_<w>/`。
+- 收集:`grep -r 'Success rate' eval_logs/`。
+- 判据:OOD 下成功率随 `w`↓ 上升、而 ID 下不升/降 = 干净的 OOD 专属收益。
 
 ## 6. 把结果打包回传给 Claude
 

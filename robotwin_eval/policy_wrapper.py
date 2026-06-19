@@ -44,6 +44,7 @@ Action decoding mirrors the training-time ``act_type``:
 
 from __future__ import annotations
 
+import os
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,7 @@ import torch
 from scipy.spatial.transform import Rotation as R, Slerp
 
 from hy_vla import HyVLAConfig, HyVLA
+from hy_vla.ttt_blend import sample_actions_blend
 
 from .transforms import (
     convert_pose,
@@ -120,6 +122,7 @@ class HyVLAPolicyWrapper:
         img_history_interval: int = 1,
         weight_dtype: torch.dtype = torch.bfloat16,
         vlm_model_path: str | None = None,
+        guidance_w: float = 1.0,
     ) -> None:
         # All architectural switches (chunk_size, use_video_encoder,
         # spacetime_layer_stride, past_drop_layer,
@@ -159,6 +162,12 @@ class HyVLAPolicyWrapper:
                 f"blend_mode=rel_only or pass a relabs norm pkl."
             )
         self.blend_mode = blend_mode
+
+        # Test-time language-prior guidance (velocity blend). 1.0 == stock
+        # sampling (bit-exact); w < 1 drifts the action toward the masked
+        # language prior. See hy_vla/ttt_blend.
+        self.guidance_w = float(guidance_w)
+        print(f"[HyVLAPolicyWrapper] guidance_w = {self.guidance_w}")
 
         # Per-episode state.
         self.exc_action_size = int(exc_action_size)
@@ -221,12 +230,7 @@ class HyVLAPolicyWrapper:
             elif isinstance(v, torch.Tensor):
                 batch[k] = v.to(self.weight_dtype).cuda()
 
-        self.policy.reset()
-        action0 = self.policy.select_action(batch)
-        actions = [action0]
-        for _ in range(len(self.policy._action_queue)):
-            actions.append(self.policy._action_queue.popleft())
-        actions = torch.cat(actions, dim=0).cpu().numpy()
+        actions = self._sample_chunk(batch)
 
         actions_xyzw = self._decode_actions(actions, initial_ee_pose_xyzw)
 
@@ -243,6 +247,32 @@ class HyVLAPolicyWrapper:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+    @torch.no_grad()
+    def _sample_chunk(self, batch: dict[str, Any]) -> np.ndarray:
+        """Run one network forward and return the full ``(T, action_dim)`` chunk.
+
+        ``guidance_w == 1.0`` uses the stock flow sampler (bit-exact). For
+        ``guidance_w < 1.0`` the velocity is blended toward the masked language
+        prior every Euler step (``hy_vla/ttt_blend``). Mirrors the unpadding
+        done by ``HyVLA.select_action``.
+        """
+        self.policy.eval()
+        images, img_masks = self.policy.prepare_images(batch)
+        state = self.policy.prepare_state(batch)
+        lang_tokens, lang_masks, _ = self.policy.prepare_language(batch)
+
+        if self.guidance_w == 1.0:
+            actions = self.policy.model.sample_actions(
+                images, img_masks, lang_tokens, lang_masks, state,
+            )
+        else:
+            actions = sample_actions_blend(
+                self.policy.model, images, img_masks, lang_tokens, lang_masks,
+                state, w=self.guidance_w,
+            )
+        actions = actions[:, :, : self.policy.config.action_feature.shape[0]]
+        return actions[0].cpu().numpy()
+
     def _decode_actions(self, actions: np.ndarray, initial_ee_pose_xyzw: np.ndarray) -> np.ndarray:
         """Apply rel/abs/blend decoding to ``(T, 20)`` raw network output."""
         if not self._has_abs_stats:
@@ -353,6 +383,12 @@ def build_policy(usr_args: dict[str, Any]) -> HyVLAPolicyWrapper:
             "norm_path is required (no norm_stats.pkl found next to the ckpt either)"
         )
 
+    # guidance_w: env var HYVLA_GUIDANCE_W takes precedence over the yml so a
+    # w-sweep can drive it per-run without editing config (see
+    # scripts/eval_sweep_w.sh).
+    gw_env = os.environ.get("HYVLA_GUIDANCE_W")
+    guidance_w = float(gw_env) if gw_env is not None else float(usr_args.get("guidance_w", 1.0))
+
     return HyVLAPolicyWrapper(
         ckpt_path=ckpt_path,
         norm_path=norm_path,
@@ -361,6 +397,7 @@ def build_policy(usr_args: dict[str, Any]) -> HyVLAPolicyWrapper:
         img_history_size=int(usr_args.get("img_history_size", 1)),
         img_history_interval=int(usr_args.get("img_history_interval", 1)),
         vlm_model_path=usr_args.get("vlm_model_path"),
+        guidance_w=guidance_w,
     )
 
 

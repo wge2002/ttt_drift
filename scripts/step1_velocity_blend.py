@@ -37,7 +37,7 @@ import json
 import torch
 
 from hy_vla import HyVLA, HyVLAConfig
-from hy_vla.modeling_hy_vla import make_att_2d_masks
+from hy_vla.ttt_blend import sample_actions_blend
 
 DEFAULT_INSTRUCTIONS = [
     "pick up the bottle",
@@ -52,57 +52,6 @@ def build_batch(instruction, image_keys, state_dim, device, dtype, k=6):
     batch["observation.state"] = torch.zeros((1, state_dim), device=device, dtype=dtype)
     batch["task"] = [instruction]
     return batch
-
-
-@torch.no_grad()
-def build_prefix(model, images, img_masks, lang_tokens, lang_masks):
-    """Replicate the prefix/KV-cache stage of ``sample_actions`` and return
-    ``(prefix_pad_masks, past_key_values)`` ready for ``denoise_step``."""
-    pe, ppm, pam, mmp, iir, ifr = model.embed_prefix(images, img_masks, lang_tokens, lang_masks)
-    att2d = make_att_2d_masks(ppm, pam)
-    pos = torch.cumsum(ppm, dim=1) - 1
-    model._apply_visual_segment_mask(att2d, iir, ifr)
-    (_, _), pkv, _, _ = model.dual_tower.forward(
-        attention_mask=att2d,
-        position_ids=pos,
-        past_key_values=None,
-        inputs_embeds=[pe, None],
-        use_cache=model.config.use_cache,
-        fill_kv_cache=True,
-        modality_masks=[mmp, None],
-    )
-    return ppm, pkv
-
-
-@torch.no_grad()
-def sample_blend(model, images, img_masks, lang_tokens, lang_masks, state, w, noise):
-    """Euler-integrate the blended velocity field. Returns (action, traj) where
-    traj[i] = (‖v_full‖, ‖v_masked‖, ‖v_blend‖) mean per-motor L2 at step i."""
-    bsize = state.shape[0]
-    device = state.device
-
-    ppm_f, pkv_f = build_prefix(model, images, img_masks, lang_tokens, lang_masks)
-    masked = [torch.zeros_like(m) for m in img_masks]
-    ppm_m, pkv_m = build_prefix(model, images, masked, lang_tokens, lang_masks)
-
-    dt = torch.tensor(-1.0 / model.config.num_steps, dtype=torch.float32, device=device)
-    x_t = noise.clone()
-    time = torch.tensor(1.0, dtype=torch.float32, device=device)
-
-    def n(v):
-        return v.detach().float().norm(dim=-1).mean().item()
-
-    traj = []
-    while time >= -dt / 2:
-        et = time.expand(bsize)
-        v_f, _ = model.denoise_step(state, ppm_f, pkv_f, x_t, et)
-        v_m, _ = model.denoise_step(state, ppm_m, pkv_m, x_t, et)
-        # lerp form: endpoints w=1 -> v_f and w=0 -> v_m are fp-exact
-        v = w * v_f + (1.0 - w) * v_m
-        traj.append((n(v_f), n(v_m), n(v)))
-        x_t = x_t + dt * v
-        time = time + dt
-    return x_t, traj
 
 
 def l2(a, b):
@@ -163,8 +112,9 @@ def main():
 
         actions = {}
         for w in ws:
-            a, traj = sample_blend(model, images, img_masks, lang_tokens, lang_masks,
-                                   state, w, noise)
+            a, traj = sample_actions_blend(model, images, img_masks, lang_tokens,
+                                           lang_masks, state, w, noise=noise,
+                                           return_traj=True)
             a = a[..., :act_dim].float().cpu()
             actions[w] = a
             emit({

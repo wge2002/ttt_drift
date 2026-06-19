@@ -37,9 +37,9 @@ TASKS=(
 
 # --------- 3. RoboTwin eval_policy.py invariants for Hy-VLA ---------
 CKPT_SETTING=Hy-VLA-RoboTwin
-TASK_CONFIG=demo_clean
-INSTRUCTION_TYPE=unseen
-SEED=10000
+TASK_CONFIG=${TASK_CONFIG:-demo_clean}
+INSTRUCTION_TYPE=${INSTRUCTION_TYPE:-unseen}
+SEED=${SEED:-10000}
 
 # --------- 4. Symlink robotwin_eval/ -> RoboTwin/policy/hy_vla (idempotent) ---
 ln -sfn "${HY_VLA_DIR}/robotwin_eval" "${ROBOTWIN_DIR}/policy/hy_vla"
@@ -63,9 +63,9 @@ echo "========================================================"
 n_done=0
 n_failed=0
 for task in "${TASKS[@]}"; do
-    local log="${LOG_DIR}/${task}.log"
+    log="${LOG_DIR}/${task}.log"
     echo "[${task}] starting ...  (log: ${log})"
-    local rc=0
+    rc=0
     (
         cd "${ROBOTWIN_DIR}"
         PYTHONWARNINGS=ignore::UserWarning \
@@ -86,7 +86,6 @@ for task in "${TASKS[@]}"; do
             >"${log}"
     ) || rc=$?
     if [ $rc -eq 0 ]; then
-        local rate
         rate=$(grep -a 'Success rate' "${log}" | tail -1 | sed -E 's/\x1b\[[0-9;]*m//g' || true)
         echo "[${task}] done.  ${rate}"
         n_done=$((n_done + 1))

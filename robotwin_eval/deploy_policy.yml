@@ -31,3 +31,9 @@ exc_action_size: 7
 # --- MEM video-encoder cadence -------------------------------------------
 img_history_size: 6
 img_history_interval: 5
+
+# --- Test-time language-prior guidance (velocity blend) ------------------
+# 1.0 = stock sampling (vision fully trusted, bit-exact). w < 1.0 drifts the
+# action toward the masked language prior (less vision) per Euler step at 2x
+# forward cost. Env var HYVLA_GUIDANCE_W overrides this (used by the w-sweep).
+guidance_w: 1.0
