@@ -1,0 +1,140 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+# =============================================================================
+# Project metadata (PEP 621)
+# =============================================================================
+[project]
+name = "hy-vla"
+version = "0.1.0"
+description = "Hy-Embodied-0.5-VLA: From Vision-Language-Action Models to a Real-World Robot Learning Stack"
+readme = "README.md"
+license = { file = "License.txt" }
+requires-python = ">=3.10,<3.13"
+authors = [{ name = "Tencent Robotics X, HY Vision Team" }]
+keywords = ["vla", "robotics", "manipulation", "robotwin", "hy-embodied"]
+classifiers = [
+    # Tencent HY Community License Agreement is not in the OSI-approved list,
+    # so we use the generic "Other/Proprietary License" trove classifier.
+    "License :: Other/Proprietary License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# -----------------------------------------------------------------------------
+# Runtime + training dependencies. A single `uv sync` installs everything
+# needed to train Hy-VLA on a CUDA 12.x machine -- no extras required.
+#
+# * `torch` is routed to the cu128 PyTorch wheel index (forward-compatible
+#   with all 12.x and 13.x NVIDIA drivers) via `[tool.uv.sources]` below.
+# * `flash-attn` is pinned to a prebuilt cu12 / torch2.7 / cxx11abi=TRUE
+#   wheel from the upstream GitHub release page -- no nvcc / source build.
+# * `transformers` follows the same upstream commit HY-Embodied uses
+#   (https://github.com/Tencent-Hunyuan/HY-Embodied/blob/main/requirements.txt).
+#   PEP 508 direct references require
+#   `tool.hatch.metadata.allow-direct-references = true` (set below).
+# -----------------------------------------------------------------------------
+dependencies = [
+    # Core deep-learning stack (cu128 wheel selected via tool.uv.sources).
+    "torch>=2.7,<2.8",
+    "numpy>=1.24,<2.0",
+    "transformers @ git+https://github.com/huggingface/transformers@9293856c419762ebf98fbe2bd9440f9ce7069f1a",
+    "safetensors>=0.4",
+    "huggingface-hub>=0.23",
+    # Vision backbone
+    "timm==1.0.21",
+    # Geometry helpers (RoboTwin evaluation)
+    "scipy>=1.11",
+    # Prebuilt FlashAttention-2 wheel (cu12 / torch 2.7 / cxx11abi=TRUE),
+    # source URL routed via tool.uv.sources below.
+    "flash-attn==2.7.4.post1",
+    # Training stack -- imported unconditionally by hy_vla/train.py,
+    # hy_vla/data/*.py and hy_vla/utils/*.
+    "accelerate>=0.28",
+    "deepspeed>=0.17",
+    "hydra-core>=1.3",
+    "omegaconf>=2.3",
+    "wandb>=0.17",
+    "tqdm>=4.66",
+    "h5py>=3.10",
+    "Pillow>=10.0",
+    "torchvision>=0.19",
+    "opencv-python-headless>=4.8",
+    "imgaug>=0.4",
+    # Lance dataset (local + HF Hub pretraining data)
+    "pylance>=0.30",
+    "pyarrow>=14.0",
+    "lancedb>=0.17",
+    # Lance episode visualisation (scripts/vis_umi_episode.py)
+    "matplotlib>=3.7",
+    "imageio>=2.35",
+    "imageio-ffmpeg>=0.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/tencent/Hy-VLA"
+Repository = "https://github.com/tencent/Hy-VLA"
+
+# =============================================================================
+# uv configuration
+# =============================================================================
+# Run `uv sync` to materialize a `.venv/` with everything needed to train.
+# Run `uv lock` to refresh `uv.lock`.
+[tool.uv]
+# Default to bytecode compilation in the venv; trims first-run latency.
+compile-bytecode = true
+# If `flash-attn` ever falls back to a source build, uv must skip its own
+# build isolation so the host torch is visible. With the prebuilt wheel
+# pinned in tool.uv.sources this is a defensive no-op.
+no-build-isolation-package = ["flash-attn"]
+# Strip the GUI-linked `opencv-python` that `imgaug==0.4.0` pulls in as a
+# transitive dependency. The full build links against GTK and needs the
+# system library `libgthread-2.0.so.0`, which is missing on minimal training
+# containers and triggers `ImportError: libgthread-2.0.so.0` at
+# `import cv2` time. We already ship `opencv-python-headless` (same `cv2`
+# module, no GUI/GTK linkage), so disabling the transitive `opencv-python`
+# leaves a working `cv2` in the venv with one fewer system-library
+# requirement. The `sys_platform == 'never'` marker is always false, which
+# is uv's idiom for "drop this transitive requirement entirely".
+override-dependencies = [
+    "opencv-python ; sys_platform == 'never'",
+]
+
+# ---- PyTorch CUDA wheel selection ------------------------------------------
+# uv lets us register a package index and route a single requirement
+# (`torch`) to it. Official pattern:
+# https://docs.astral.sh/uv/guides/integration/pytorch/
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+# Pull torch from the cu128 PyTorch wheel index. cu128 is forward-compatible
+# with every 12.x driver (12.1 / 12.4 / 12.6 / 12.8) and 13.x drivers as
+# well, so a single wheel covers the supported deployment matrix.
+torch = { index = "pytorch-cu128" }
+# Prebuilt FlashAttention-2 wheels. Match Python ABI (cp310/311/312) and
+# torch 2.7 / cu12 / cxx11abi=TRUE (the cu128 torch wheel is built with
+# `_GLIBCXX_USE_CXX11_ABI=1`, so we must match that here).
+flash-attn = [
+    { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.7cxx11abiTRUE-cp310-cp310-linux_x86_64.whl", marker = "python_version == '3.10'" },
+    { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.7cxx11abiTRUE-cp311-cp311-linux_x86_64.whl", marker = "python_version == '3.11'" },
+    { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.7cxx11abiTRUE-cp312-cp312-linux_x86_64.whl", marker = "python_version == '3.12'" },
+]
+
+# =============================================================================
+# Hatch — tells hatch which package directories to ship in the wheel
+# =============================================================================
+[tool.hatch.metadata]
+# Required because `[project].dependencies` contains a `git+https://...`
+# direct reference for `transformers` (PEP 508 direct URL).
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["hy_vla"]

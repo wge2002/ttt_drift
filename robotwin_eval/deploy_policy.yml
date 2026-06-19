@@ -1,0 +1,33 @@
+# Default Hy-VLA evaluation configuration.
+#
+# This file lives next to deploy_policy.py and is consumed by RoboTwin's
+# script/eval_policy.py via:
+#
+#   python script/eval_policy.py --config policy/hy_vla/deploy_policy.yml \
+#       --overrides --task_name <task> --task_config <cfg> --seed <s> --policy_name hy_vla
+#
+# Task-side knobs (task_name, task_config, ckpt_setting, seed, test_num,
+# instruction_type, video_out_save_dir, ...) are NOT in this file -- they
+# live in RoboTwin's own task yml and CLI overrides.
+
+# --- Checkpoint -----------------------------------------------------------
+# HuggingFace repo id or local directory containing config.json +
+# model.safetensors + norm_stats.pkl. When norm_path is null the wrapper
+# auto-resolves it from <ckpt_path>/norm_stats.pkl.
+ckpt_path: tencent/Hy-VLA-RoboTwin
+norm_path: null
+
+# --- Action decoding ------------------------------------------------------
+# rel_abs  : 1:1 blend rel + abs (slerp on the quaternion).
+# rel_only : decode the rel half only.
+# abs_only : decode the abs half only.
+blend_mode: rel_abs
+
+# Number of consecutive eval steps served from a single network forward.
+# The wrapper amortizes one forward over `exc_action_size` env steps via
+# its action cache.
+exc_action_size: 7
+
+# --- MEM video-encoder cadence -------------------------------------------
+img_history_size: 6
+img_history_interval: 5

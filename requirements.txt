@@ -1,0 +1,78 @@
+# =============================================================================
+# Hy-VLA — Runtime Requirements (Open-Source Draft, v0.1)
+# =============================================================================
+# This file mirrors the *minimum* dependency set needed by the code that is
+# currently in this repository (modeling + RoboTwin evaluation + training).
+#
+# We follow a strict "import == declared dependency" discipline so the
+# compliance form stays in lockstep with the code.
+#
+# Pin policy:
+#   - Hard-pin packages whose ABI is part of our published ckpt contract
+#     (transformers is pinned to a specific upstream commit -- see below).
+#   - Use `>=` lower bounds for the rest.
+#   - Pinned versions match the env we used to produce the released weights.
+#     Update only after re-validating end-to-end accuracy.
+# =============================================================================
+
+# --- Core deep-learning stack -------------------------------------------------
+torch>=2.4
+numpy>=1.24,<2.0
+# transformers: pinned to the same upstream commit HY-Embodied uses
+# (see https://github.com/Tencent-Hunyuan/HY-Embodied/blob/main/requirements.txt).
+# This commit ships the `HunYuanVLMoT*` classes under
+# `transformers.models.hunyuan_vl_mot` and registers them in the Auto*
+# maps, so `AutoConfig.from_pretrained("tencent/HY-Embodied-0.5")` works
+# without `trust_remote_code=True`. (At this commit the classes are NOT
+# re-exported from the top-level `transformers` package, so direct
+# imports must use the submodule path.) If this URL is unreachable
+# (offline / GFW), the in-repo vendor copy at `hy_vla/hunyuan_vl_mot/`
+# provides the same classes via an idempotent Auto* registration --
+# in that fallback path, any `transformers>=4.57` install is sufficient.
+# See README.md ("Installation").
+git+https://github.com/huggingface/transformers@9293856c419762ebf98fbe2bd9440f9ce7069f1a
+safetensors>=0.4
+huggingface-hub>=0.23
+
+# --- Vision backbone & attention ---------------------------------------------
+timm==1.0.21
+flash-attn>=2.5.0   # Build from sdist; see README for prebuilt-wheel guidance.
+
+# --- Geometry helpers (RoboTwin evaluation: rotation matrices, slerp, ...) ---
+scipy>=1.11
+
+# --- Training entrypoint (hy_vla/train.py) -----------------------------------
+# All packages below are imported unconditionally by the training surface
+# (train.py, hy_vla/data/vla_dataset.py, hy_vla/data/hdf5_dataset.py and the
+# utils helpers under hy_vla/utils/). They are NOT needed at inference /
+# RoboTwin evaluation time -- a deployment-only install can omit them.
+accelerate>=0.28
+deepspeed>=0.17
+diffusers>=0.30
+hydra-core>=1.3
+omegaconf>=2.3
+wandb>=0.17
+tqdm>=4.66
+h5py>=3.10
+Pillow>=10.0
+torchvision>=0.19
+opencv-python-headless>=4.8
+imgaug>=0.4
+
+# --- Training-time fused kernels --------------------------------------------
+# Liger-Kernel provides fused SwiGLU + causal-LM cross-entropy. Every call
+# site (whether sourced from the upstream transformers fork or the in-repo
+# vendor fallback at `hy_vla/hunyuan_vl_mot/modeling_hunyuan_vl_mot.py`) is
+# guarded with `try/except` and a `use_liger` flag, so the model falls
+# back to the stock transformers loss when Liger is absent.
+liger-kernel>=0.5
+
+# --- Lance dataset (local + HF Hub pretraining data) --------------------------
+pylance>=0.30
+pyarrow>=14.0
+lancedb>=0.17
+
+# --- Visualisation: render Lance episodes as mp4 (scripts/vis_umi_episode.py) ---
+matplotlib>=3.7
+imageio>=2.35
+imageio-ffmpeg>=0.5
