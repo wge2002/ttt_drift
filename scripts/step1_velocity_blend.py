@@ -97,7 +97,8 @@ def sample_blend(model, images, img_masks, lang_tokens, lang_masks, state, w, no
         et = time.expand(bsize)
         v_f, _ = model.denoise_step(state, ppm_f, pkv_f, x_t, et)
         v_m, _ = model.denoise_step(state, ppm_m, pkv_m, x_t, et)
-        v = v_m + w * (v_f - v_m)
+        # lerp form: endpoints w=1 -> v_f and w=0 -> v_m are fp-exact
+        v = w * v_f + (1.0 - w) * v_m
         traj.append((n(v_f), n(v_m), n(v)))
         x_t = x_t + dt * v
         time = time + dt
@@ -149,11 +150,16 @@ def main():
         torch.manual_seed(args.seed)
         noise = model.sample_noise((1, config.n_action_steps, config.max_action_dim), device)
 
-        # correctness anchor: stock sampler with the same noise
+        # correctness anchor: stock sampler with the same noise, run TWICE so
+        # ‖stock1-stock2‖ gives the model's own bf16/CUDA nondeterminism floor.
         with torch.no_grad():
             a_stock = model.sample_actions(
                 images, img_masks, lang_tokens, lang_masks, state, noise=noise.clone(),
             )[..., :act_dim].float().cpu()
+            a_stock2 = model.sample_actions(
+                images, img_masks, lang_tokens, lang_masks, state, noise=noise.clone(),
+            )[..., :act_dim].float().cpu()
+        noise_floor = l2(a_stock, a_stock2)
 
         actions = {}
         for w in ws:
@@ -174,13 +180,19 @@ def main():
         a_full = actions[ws[0]]   # w == max (1.0)
         a_lang = actions[ws[-1]]  # w == min (0.0)
         anchor = l2(actions[1.0], a_stock) if 1.0 in actions else float("nan")
-        if 1.0 in actions and anchor > 1e-2:
+        # OK if the blend(w=1) deviation is within the nondeterminism floor
+        # (allow a little slack for the extra v_m forwards: 3x floor or 1e-2).
+        tol = max(1e-2, 3.0 * noise_floor)
+        if 1.0 in actions and anchor > tol:
             anchor_ok = False
+        emit({"type": "anchor", "instruction": instr,
+              "anchor_blend_w1_vs_stock": anchor, "noise_floor": noise_floor, "tol": tol})
 
         print(f"\n=== {instr!r} ===")
         if 1.0 in actions:
-            print(f"  anchor ‖blend(w=1) - stock‖ = {anchor:.4f}  "
-                  f"({'OK' if anchor <= 1e-2 else 'MISMATCH!'})")
+            print(f"  anchor ‖blend(w=1) - stock‖ = {anchor:.4f} | "
+                  f"nondeterminism floor ‖stock1-stock2‖ = {noise_floor:.4f} | "
+                  f"({'OK' if anchor <= tol else 'MISMATCH!'})")
         print(f"  {'w':>5} | {'‖a(w)-a_full‖':>13} | {'‖a(w)-a_lang‖':>13} | {'abs_mean':>8}")
         last_df = None
         mono = True
