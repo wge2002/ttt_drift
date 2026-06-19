@@ -150,9 +150,10 @@ def main():
         noise = model.sample_noise((1, config.n_action_steps, config.max_action_dim), device)
 
         # correctness anchor: stock sampler with the same noise
-        a_stock = model.sample_actions(
-            images, img_masks, lang_tokens, lang_masks, state, noise=noise.clone(),
-        )[..., :act_dim].float().cpu()
+        with torch.no_grad():
+            a_stock = model.sample_actions(
+                images, img_masks, lang_tokens, lang_masks, state, noise=noise.clone(),
+            )[..., :act_dim].float().cpu()
 
         actions = {}
         for w in ws:
