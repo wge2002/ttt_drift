@@ -64,3 +64,8 @@ _tmp_*.sh
 
 # generated experiment outputs (regenerated each run)
 results/*.jsonl
+
+# eval outputs
+eval_logs/
+run_*.log
+results_*.tar.gz
