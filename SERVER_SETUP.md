@@ -78,8 +78,12 @@ PY
 
 ## 4. step 0 —— mask 有效性诊断(idea 的地基,见 idea md §6)
 
-> 脚本待写(等环境就绪后由 Claude 补)。核心:借 `img_mask` 把全部相机标为缺失,跑 `sample_actions`,记录
-> (i) masked vs 正常的 action chunk、(ii) velocity 幅度逐 Euler step,输出成 jsonl 下载回来做相关性分析。
+不需要 RoboTwin 模拟器,一张卡 + 权重即可:
+```bash
+python scripts/diag_step0_mask.py --ckpt ./ckpts/Hy-VLA-RoboTwin --out step0_mask_diag.jsonl
+```
+脚本做什么:用**同一份 noise**跑「vision 正常」与「全 mask」两支,记录每步 `‖v_t‖` 与最终 action chunk,核心看**换不同指令时 masked 动作是否随之变化**(=是否存在可 drift 的 language 先验)。stdout 直接给判读,完整数据写进 jsonl。
+把 `step0_mask_diag.jsonl` 下载发我,我做相关性 / 流形分析。
 
 ## 5. 完整 RoboTwin eval(需要单独装 RoboTwin 2.0 模拟器)
 
