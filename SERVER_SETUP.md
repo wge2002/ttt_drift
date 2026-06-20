@@ -309,7 +309,46 @@ RLinf:      torch 2.6.0+cu124 / warp 1.11.1 / site-packages curobo
 如果确认要继续,下一步应新建独立环境复制 RLinf 已验证的 torch/cuRobo/warp 栈,而不是升级或污染
 RLinf `.venv`。
 
-待确认后的候选做法是 clone 当前 `RoboTwinHy` 以保留 RoboTwin/SAPIEN 其他依赖,然后只替换 RLinf
+推荐直接用仓库脚本。它会 clone `RoboTwinHy -> RoboTwinHy26`,恢复前面调试 patch 过的 RoboTwin 文件,
+替换 torch/cuRobo/warp/SAPIEN/mplib 关键栈,安装 `ffmpeg`,最后检查 `curobo` 必须来自
+site-packages 而不是 `RoboTwin_hy/envs/curobo/src`。
+
+```bash
+cd /home/jovyan/code/wge/ttt_drift
+git pull --ff-only
+
+BASE_ENV=RoboTwinHy \
+ENV_NAME=RoboTwinHy26 \
+ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy \
+bash scripts/setup_robotwin_hy26_stack.sh
+```
+
+如果目标环境已经存在,脚本会停下来不覆盖。确认要重建时再显式加:
+
+```bash
+HYVLA_RECREATE_ENV=1 \
+BASE_ENV=RoboTwinHy \
+ENV_NAME=RoboTwinHy26 \
+ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy \
+bash scripts/setup_robotwin_hy26_stack.sh
+```
+
+建完后先跑最小验证:
+
+```bash
+conda activate RoboTwinHy26
+cd /home/jovyan/code/wge/ttt_drift
+
+HYVLA_REQUIRE_SITE_CUROBO=1 \
+TASKS_OVERRIDE=adjust_bottle \
+TEST_NUM=1 \
+ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy \
+CKPT_PATH=/home/jovyan/code/wge/ttt_drift/ckpts/Hy-VLA-RoboTwin \
+CUDA_VISIBLE_DEVICES=0 \
+bash scripts/eval_robotwin_test.sh
+```
+
+脚本内部等价做法是 clone 当前 `RoboTwinHy` 以保留 RoboTwin/SAPIEN 其他依赖,然后只替换 RLinf
 已验证的关键栈:
 
 ```bash

@@ -19,6 +19,7 @@
 #   HYVLA_PATCH_CUROBO_NO_GRAPH 1 to disable cuRobo CUDA graph warmup
 #   HYVLA_PATCH_CUROBO_SKIP_WARMUP 1 to skip cuRobo warmup calls entirely
 #   HYVLA_PATCH_SKIP_EXPERT_CHECK 1 to skip RoboTwin expert play_once precheck
+#   HYVLA_REQUIRE_SITE_CUROBO 1 to fail if cuRobo imports from RoboTwin source
 # =============================================================================
 
 set -euo pipefail
@@ -110,6 +111,7 @@ if [ "${HYVLA_PATCH_CUROBO_NO_GRAPH:-0}" = "1" ] || [ "${HYVLA_PATCH_CUROBO_SKIP
 fi
 
 mkdir -p "${LOG_DIR}"
+export HY_VLA_DIR ROBOTWIN_DIR CKPT_PATH LOG_DIR
 export PYTHONPATH="${HY_VLA_DIR}:${PYTHONPATH:-}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
 export NVIDIA_DRIVER_CAPABILITIES="${NVIDIA_DRIVER_CAPABILITIES:-all}"
@@ -156,12 +158,14 @@ if grep -q "skip expert play_once" "${ROBOTWIN_DIR}/script/eval_policy.py" 2>/de
 else
     echo "Expert precheck: default"
 fi
+echo "Require site cuRobo: ${HYVLA_REQUIRE_SITE_CUROBO:-0}"
 echo "========================================================"
 
 # --------- 6. Hy-VLA import/dependency preflight ---------
 if [ "${HYVLA_SKIP_PREFLIGHT:-0}" != "1" ]; then
     python - <<'PY'
 import importlib.util
+import os
 import sys
 
 print("Python        :", sys.executable, flush=True)
@@ -178,6 +182,45 @@ print(
     getattr(transformers, "__file__", "<unknown>"),
     flush=True,
 )
+
+try:
+    import torch
+    print("torch         :", torch.__version__, torch.version.cuda, flush=True)
+except Exception as exc:
+    print("torch import failed:", repr(exc), flush=True)
+    raise SystemExit(1)
+
+try:
+    import warp
+    print(
+        "warp          :",
+        getattr(warp, "__version__", "<unknown>"),
+        getattr(warp, "__file__", "<unknown>"),
+        flush=True,
+    )
+except Exception as exc:
+    print("warp import failed:", repr(exc), flush=True)
+    raise SystemExit(1)
+
+try:
+    import curobo
+    curobo_file = getattr(curobo, "__file__", "<unknown>")
+    print("curobo        :", curobo_file, flush=True)
+except Exception as exc:
+    print("curobo import failed:", repr(exc), flush=True)
+    raise SystemExit(1)
+
+robotwin_dir = os.environ.get("ROBOTWIN_DIR", "")
+source_curobo = os.path.join(robotwin_dir, "envs", "curobo", "src")
+if robotwin_dir and os.path.abspath(curobo_file).startswith(os.path.abspath(source_curobo)):
+    msg = (
+        "cuRobo is importing from RoboTwin source tree, not site-packages: "
+        f"{curobo_file}"
+    )
+    if os.environ.get("HYVLA_REQUIRE_SITE_CUROBO") == "1":
+        print("ERROR:", msg, flush=True)
+        raise SystemExit(1)
+    print("WARNING:", msg, flush=True)
 
 missing = [
     name

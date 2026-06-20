@@ -386,3 +386,7 @@ RLinf .venv:
 - 当前 blocker 是 `RoboTwinHy` 的 cuRobo 执行 EE action 时在 H20 上触发 CUDA illegal instruction。
 - 不要继续 patch torch2.4/cu121/warp1.12/source-curobo 这条环境;下一步应新建独立环境,复制 RLinf 已验证的
   torch2.6/cu124/warp1.11/site-packages-curobo 栈,但不要直接污染 RLinf `.venv`。
+
+已补一个保守入口:`scripts/setup_robotwin_hy26_stack.sh`。它默认 clone
+`RoboTwinHy -> RoboTwinHy26`,替换关键栈并做 import 路径自检;后续 eval 可加
+`HYVLA_REQUIRE_SITE_CUROBO=1`,强制确认 `curobo` 没有再走回 `RoboTwin_hy/envs/curobo/src`。
