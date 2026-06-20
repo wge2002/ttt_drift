@@ -101,7 +101,8 @@ missing = [
 if missing:
     print("Missing Hy-VLA runtime module(s):", ", ".join(missing), flush=True)
     print(
-        'Install at least: pip install -U "transformers>=4.57,<4.58" '
+        'Install these inside the dedicated RoboTwinHy conda env, not RLinf .venv: '
+        'pip install -U "transformers>=4.57,<4.58" '
         'safetensors "huggingface-hub>=0.23" timm==1.0.21',
         flush=True,
     )

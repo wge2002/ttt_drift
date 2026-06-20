@@ -89,18 +89,32 @@ python scripts/diag_step0_mask.py --ckpt ./ckpts/Hy-VLA-RoboTwin --out step0_mas
 
 `robotwin_eval/` 只是适配器;真正跑要有 RoboTwin 2.0 仓库 + 其仿真依赖(SAPIEN 等)。安装见官方 [RoboTwin-Platform/RoboTwin](https://github.com/RoboTwin-Platform/RoboTwin):
 
-### 5.0 H20 当前推荐路径:复用 RLinf `.venv` + `RoboTwin_hy`
+### 5.0 H20 当前推荐路径:新建独立 conda env + `RoboTwin_hy`
 
-2026-06-20 更新:同一个 H20 Docker 中,RLinf 的 `.venv` 已经能跑通 RoboTwin rollout。因此不要再按旧
-`conda RoboTwin` 环境复现;当前 Hy 测试优先复用 RLinf `.venv`,并显式指定 NVIDIA ICD:
+2026-06-20 更新:同一个 H20 Docker 中,RLinf 的 `.venv` 已经能跑通 RoboTwin rollout,所以 H20/Vulkan
+不是根因。但 **不要污染 RLinf `.venv`**。当前 Hy 测试应新建一个独立 conda 环境,只借用 RLinf
+成功经验里的 NVIDIA ICD 环境变量。
 
 ```bash
-source /home/jovyan/code/wge/RLinf/.venv/bin/activate
-cd /home/jovyan/code/wge/ttt_drift
+# 系统库。如果已装过,apt 会直接跳过。
+sudo apt-get update
+sudo apt-get install -y libgl1 libglib2.0-0 libgomp1 libvulkan1 mesa-vulkan-drivers vulkan-tools gcc-12 g++-12
+
+# 新环境:不要用 RLinf .venv。
+conda create -n RoboTwinHy python=3.10 -y
+conda activate RoboTwinHy
+
+# 给 curobo/pytorch3d 编译用。若 script/_install.sh 已经装好,这步也不会污染其他环境。
+conda install -c "nvidia/label/cuda-12.1.0" cuda-toolkit -y
+export CUDA_HOME="${CONDA_PREFIX}"
+export PATH="${CUDA_HOME}/bin:${PATH}"
+export CC=/usr/bin/gcc-12
+export CXX=/usr/bin/g++-12
+export NVCC_PREPEND_FLAGS="-ccbin /usr/bin/g++-12"
+export TORCH_CUDA_ARCH_LIST="9.0"
 
 export ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy
 export CKPT_PATH=/home/jovyan/code/wge/ttt_drift/ckpts/Hy-VLA-RoboTwin
-export PYTHONPATH=/home/jovyan/code/wge/ttt_drift:${ROBOTWIN_DIR}:${PYTHONPATH:-}
 export VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
 export VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_icd.json
 export NVIDIA_DRIVER_CAPABILITIES=all
@@ -108,43 +122,51 @@ export XDG_RUNTIME_DIR=/tmp/xdg-jovyan
 mkdir -p "${XDG_RUNTIME_DIR}"
 ```
 
-先把 Hy 推理侧 runtime deps 补进这个 `.venv`。这里不跑完整 `requirements.txt`,避免把 RLinf
-环境里的 torch/SAPIEN/RoboTwin 栈洗掉:
+安装/修复 RoboTwin 仿真依赖:
 
 ```bash
-pip install -U "transformers>=4.57,<4.58" safetensors "huggingface-hub>=0.23" timm==1.0.21
-pip install -e /home/jovyan/code/wge/ttt_drift
-python - <<'PY'
-import importlib.util, sys, torch, transformers
-print("python", sys.executable)
-print("torch", torch.__version__, torch.version.cuda)
-print("transformers", transformers.__version__, transformers.__file__)
-for name in ["transformers.modeling_layers", "timm", "flash_attn"]:
-    print(name, "=", importlib.util.find_spec(name) is not None)
-import hy_vla
-print("hy_vla import OK")
-PY
+cd "${ROBOTWIN_DIR}"
+bash script/_install.sh
+python script/update_embodiment_config_path.py
+# 如果 assets 已经下载过可跳过;不确定就跑一遍。
+bash script/_download_assets.sh
 ```
 
-如果 `flash_attn = False`,再按当前 Python/Torch 安装匹配 wheel。RLinf 现有环境若是 Python 3.11 +
-torch 2.6/cu12 且 ABI=false,常用 wheel 是:
+把 Hy-VLA adapter 装进同一个 conda env。这里 **必须用 `--no-deps`**,避免 pyproject 把
+RoboTwin 刚装好的 torch/SAPIEN/mplib/curobo 栈升级乱掉:
 
 ```bash
-pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+cd /home/jovyan/code/wge/ttt_drift
+pip install -e . --no-deps
+
+# Hy 推理最小依赖。优先装 pinned transformers fork;网络失败时再用 PyPI 4.57 + 仓库 vendor fallback。
+pip install "git+https://github.com/huggingface/transformers@9293856c419762ebf98fbe2bd9440f9ce7069f1a" \
+    safetensors "huggingface-hub>=0.23" timm==1.0.21 scipy
+
+# 如果 git clone transformers 因网络失败,用这条替代:
+# pip install -U "transformers>=4.57,<4.58" safetensors "huggingface-hub>=0.23" timm==1.0.21 scipy
+
+# Python 3.10 + torch2.4/cu12 ABI=false 对应旧成功环境里的 flash-attn wheel。
+pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
 ```
 
-再做不加载 Hy 权重的环境 smoke。`vulkaninfo` 能列出 NVIDIA H20Z 就已经说明 Vulkan ICD 选对了;
-裸 SAPIEN smoke 只保留为 90 秒限时检查,不要无限等:
+检查环境。这里会确认你没有进 RLinf `.venv`,并检查 Hy 关键模块:
 
 ```bash
 which python
 python - <<'PY'
-import os, torch
+import importlib.util, os, sys, torch, transformers
+print("python", sys.executable)
 print("torch", torch.__version__, torch.version.cuda)
-for name in ["VIRTUAL_ENV", "CUDA_HOME", "VK_ICD_FILENAMES", "VK_DRIVER_FILES", "NVIDIA_DRIVER_CAPABILITIES"]:
+print("transformers", transformers.__version__, transformers.__file__)
+for name in ["CONDA_PREFIX", "VIRTUAL_ENV", "CUDA_HOME", "VK_ICD_FILENAMES", "VK_DRIVER_FILES", "NVIDIA_DRIVER_CAPABILITIES"]:
     print(name, "=", os.environ.get(name))
+for name in ["transformers.modeling_layers", "timm", "flash_attn"]:
+    print(name, "=", importlib.util.find_spec(name) is not None)
 import sapien
 print("sapien", sapien.__file__)
+import hy_vla
+print("hy_vla import OK")
 PY
 
 vulkaninfo --summary 2>&1 | sed -n '1,80p'
@@ -160,7 +182,7 @@ PY
 ```
 
 如果这个裸 SAPIEN smoke 超时,但后面的 RoboTwin eval 打印了 `Render Well`,以 RoboTwin 的结果为准;
-那条路径更接近真实任务。
+那条路径更接近真实任务。不要因此回去改 RLinf `.venv`。
 
 确认 Hy 原始测试路径时,只跑 1 个 task × 1 rollout 即可:
 
@@ -176,7 +198,7 @@ bash scripts/eval_robotwin_test.sh
 判读:如果 SAPIEN smoke 通过,这张 H20/这个 Docker 就能跑 RoboTwin;后续失败应优先看 Hy-VLA
 依赖、checkpoint 路径或 adapter 参数,而不是再定性为 H20 固件/Vulkan 被禁。
 
-### 5.1 从零安装 RoboTwin env(通用路径;H20 上不再优先推荐)
+### 5.1 从零安装 RoboTwin env(通用路径)
 
 ```bash
 sudo apt install libvulkan1 mesa-vulkan-drivers vulkan-tools
@@ -206,7 +228,7 @@ ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy CKPT_PATH=$(pwd)/ckpts/Hy-VLA-Rob
 
 核心实验。`guidance_w<1` 把动作往语言先验拉(velocity blend);用环境变量 `HYVLA_GUIDANCE_W` 逐档驱动:
 ```bash
-ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin CKPT_PATH=$(pwd)/ckpts/Hy-VLA-RoboTwin CUDA_VISIBLE_DEVICES=0 TEST_NUM=20 TASK_CONFIG=demo_randomized bash scripts/eval_sweep_w.sh
+ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy CKPT_PATH=$(pwd)/ckpts/Hy-VLA-RoboTwin CUDA_VISIBLE_DEVICES=0 TEST_NUM=20 TASK_CONFIG=demo_randomized bash scripts/eval_sweep_w.sh
 ```
 - `TASK_CONFIG=demo_randomized` = OOD(强域随机化);再跑一遍 `TASK_CONFIG=demo_clean` 作 ID 对照。
 - 扫 `W_GRID="1.0 0.75 0.5 0.25"`(默认),日志落在 `eval_logs/<task_config>/w_<w>/`。

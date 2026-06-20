@@ -109,17 +109,27 @@ RoboTwin。
 
 ## 5. 更新后的轻量确认流程
 
-目标不是重新做完整 benchmark,而是确认“这张 H20 + 这个 Docker 能不能跑 RoboTwin 渲染”。只要下面
-`vulkaninfo`、SAPIEN smoke、以及可选的 1-task/1-rollout Hy eval 通过,就可以判定前面的失败是环境设置问题。
+目标不是重新做完整 benchmark,而是确认“这张 H20 + 这个 Docker 能不能跑 RoboTwin 渲染”,然后在
+**独立 conda env** 里跑 Hy。RLinf `.venv` 只作为已知可用的只读对照,不要往里面装 Hy 依赖。
 
-### 5.1 使用已跑通的 RLinf `.venv`
+### 5.1 新建 Hy/RoboTwin 专用 conda env
 ```
-source /home/jovyan/code/wge/RLinf/.venv/bin/activate
-cd /home/jovyan/code/wge/ttt_drift
+sudo apt-get update
+sudo apt-get install -y libgl1 libglib2.0-0 libgomp1 libvulkan1 mesa-vulkan-drivers vulkan-tools gcc-12 g++-12
+
+conda create -n RoboTwinHy python=3.10 -y
+conda activate RoboTwinHy
+
+conda install -c "nvidia/label/cuda-12.1.0" cuda-toolkit -y
+export CUDA_HOME="${CONDA_PREFIX}"
+export PATH="${CUDA_HOME}/bin:${PATH}"
+export CC=/usr/bin/gcc-12
+export CXX=/usr/bin/g++-12
+export NVCC_PREPEND_FLAGS="-ccbin /usr/bin/g++-12"
+export TORCH_CUDA_ARCH_LIST="9.0"
 
 export ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy
 export CKPT_PATH=/home/jovyan/code/wge/ttt_drift/ckpts/Hy-VLA-RoboTwin
-export PYTHONPATH=/home/jovyan/code/wge/ttt_drift:${ROBOTWIN_DIR}:${PYTHONPATH:-}
 export VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
 export VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_icd.json
 export NVIDIA_DRIVER_CAPABILITIES=all
@@ -127,42 +137,51 @@ export XDG_RUNTIME_DIR=/tmp/xdg-jovyan
 mkdir -p "${XDG_RUNTIME_DIR}"
 ```
 
-### 5.2 补 Hy 推理依赖并记录环境
-不要在 RLinf `.venv` 里直接跑完整 `requirements.txt`,以免重装 torch/SAPIEN/RoboTwin 相关栈。
-只补 Hy import 所需的最小 runtime deps:
-
+### 5.2 安装 RoboTwin_hy + Hy adapter
 ```
-pip install -U "transformers>=4.57,<4.58" safetensors "huggingface-hub>=0.23" timm==1.0.21
-pip install -e /home/jovyan/code/wge/ttt_drift
-```
-
-如果后面检查显示 `flash_attn` 缺失,再按当前 Python/Torch/CUDA 安装匹配 wheel;Python 3.11 +
-torch 2.6/cu12 且 ABI=false 时可用:
-
-```
-pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+cd "${ROBOTWIN_DIR}"
+bash script/_install.sh
+python script/update_embodiment_config_path.py
+# assets 已经下载过可跳过;不确定就跑一遍。
+bash script/_download_assets.sh
 ```
 
+把 Hy-VLA 装进同一个 conda env。注意 `--no-deps`:不要让 pyproject 升级/替换 RoboTwin 刚装好的
+torch、SAPIEN、mplib、curobo。
+```
+cd /home/jovyan/code/wge/ttt_drift
+pip install -e . --no-deps
+
+pip install "git+https://github.com/huggingface/transformers@9293856c419762ebf98fbe2bd9440f9ce7069f1a" \
+    safetensors "huggingface-hub>=0.23" timm==1.0.21 scipy
+
+# 如果 git clone transformers 因网络失败,用 PyPI 版本 + 本仓库 vendor fallback:
+# pip install -U "transformers>=4.57,<4.58" safetensors "huggingface-hub>=0.23" timm==1.0.21 scipy
+
+pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+```
+
+### 5.3 环境记录 + import preflight
 ```
 which python
 python - <<'PY'
-import importlib.util, os, torch, transformers
+import importlib.util, os, sys, torch, transformers
+print("python", sys.executable)
 print("torch", torch.__version__, torch.version.cuda)
 print("transformers", transformers.__version__, transformers.__file__)
-for name in ["CONDA_PREFIX", "VIRTUAL_ENV", "CUDA_HOME", "LD_LIBRARY_PATH",
-             "VK_ICD_FILENAMES", "VK_DRIVER_FILES", "NVIDIA_DRIVER_CAPABILITIES"]:
+for name in ["CONDA_PREFIX", "VIRTUAL_ENV", "CUDA_HOME", "VK_ICD_FILENAMES",
+             "VK_DRIVER_FILES", "NVIDIA_DRIVER_CAPABILITIES"]:
     print(name, "=", os.environ.get(name))
 for name in ["transformers.modeling_layers", "timm", "flash_attn"]:
     print(name, "=", importlib.util.find_spec(name) is not None)
-try:
-    import sapien
-    print("sapien", sapien.__file__)
-except Exception as exc:
-    print("sapien import failed:", repr(exc))
+import sapien
+print("sapien", sapien.__file__)
+import hy_vla
+print("hy_vla import OK")
 PY
 ```
 
-### 5.3 Vulkan/SAPIEN smoke
+### 5.4 Vulkan/SAPIEN smoke
 `vulkaninfo` 能列出 NVIDIA H20Z 就说明 ICD 选择已经对。裸 SAPIEN smoke 只做 90 秒限时检查;
 如果它超时,但后面的 RoboTwin eval 打印 `Render Well`,以 RoboTwin 的真实路径为准。
 
@@ -181,7 +200,7 @@ PY
 预期:`vulkaninfo` 能看到 NVIDIA ICD/device。若 Python 输出 `RENDER OK ...`,裸 SAPIEN 也通过;
 若只在 RoboTwin eval 中看到 `Render Well`,也足以说明真实 eval 渲染链路通过。
 
-### 5.4 可选:Hy 原始测试的最小 rollout
+### 5.5 可选:Hy 原始测试的最小 rollout
 ```
 TASKS_OVERRIDE=adjust_bottle \
 TEST_NUM=1 \
@@ -192,11 +211,11 @@ bash scripts/eval_robotwin_test.sh
 ```
 
 判读:
-- 如果 5.3 通过,但 5.4 因 Hy-VLA import/权重/transformers 失败,说明 **RoboTwin/SAPIEN 环境可用**,
+- 如果 5.4 通过,但 5.5 因 Hy-VLA import/权重/transformers 失败,说明 **RoboTwin/SAPIEN 环境可用**,
   需要修 Hy-VLA 依赖或 checkpoint 路径。
-- 如果 5.3 在 RLinf `.venv` 里也失败,再回到 Vulkan loader/ICD 排查。
+- 如果 5.4 在新 conda env 里失败,先和 RLinf `.venv` 的成功环境变量对照,再回到 Vulkan loader/ICD 排查。
 
-### 5.5 只有 smoke 失败时才需要的 Vulkan 诊断
+### 5.6 只有 smoke 失败时才需要的 Vulkan 诊断
 ```
 nvidia-smi -L
 cat /proc/driver/nvidia/version
@@ -209,7 +228,7 @@ cat /etc/vulkan/icd.d/nvidia_icd.json
 nvidia-smi -q | grep -iE "Virtualization|vGPU|MIG|Compute Mode|GSP"
 ```
 
-### 5.6 还想往根因挖,可继续试的方向
+### 5.7 还想往根因挖,可继续试的方向
 - **完整 loader 跟踪**(看协商在哪断、是否 dlopen 了次级库失败):
 ```
 VK_LOADER_DEBUG=all VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json vulkaninfo 2>&1 | sed -n '1,120p'
@@ -217,12 +236,12 @@ VK_LOADER_DEBUG=all VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json vulkaninf
 - **看 GPU 是否报告图形能力 / 有无错误**:`nvidia-smi -q | grep -iE "Graphics|ECC|Fabric|Persistence"`;`dmesg 2>/dev/null | grep -i nvidia | tail -40`(可能无权限)。
 - **换一块 GPU 试**:`CUDA_VISIBLE_DEVICES=1 vulkaninfo --summary`(各卡逐一)。
 - **更新 Vulkan loader**:系统 `libvulkan1` 是 1.3.275,可试装更新的 loader 再协商。
-- **最终判定手段**:同样的 5.3 在 RLinf `.venv` 可 `RENDER OK`,而旧 conda 不行,则坐实是
-  **旧 Python/依赖/ICD 运行路径**的问题,而非 H20 卡本身。
+- **最终判定手段**:RLinf `.venv` 只作为只读成功对照;若新 conda env 不行,优先比较环境变量、
+  SAPIEN/mplib/CUDA 版本和 NVIDIA ICD 选择。
 
-### 5.7 给平台方的诉求(仅当 RLinf `.venv` smoke 也失败时)
-旧版诉求不应再直接发送。只有在当前 RLinf `.venv` 的 5.3 也稳定失败时,再整理新的 `vulkaninfo`
-和 SAPIEN smoke 日志给平台方。
+### 5.8 给平台方的诉求(仅当新 conda + RLinf 对照都失败时)
+旧版诉求不应再直接发送。只有在新 conda env 和 RLinf `.venv` 对照都稳定失败时,再整理新的
+`vulkaninfo` 和 SAPIEN smoke 日志给平台方。
 
 ---
 
@@ -232,4 +251,4 @@ VK_LOADER_DEBUG=all VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json vulkaninf
 
 - **H20 这张卡/这个 Docker 可以跑 RoboTwin。**
 - 旧 `h20_fail.md` 的固件级定性已经过期。
-- Hy 的下一步应复用 RLinf `.venv` 和 NVIDIA ICD 环境,不要重建已删除的旧 `conda RoboTwin`。
+- Hy 的下一步应新建独立 `RoboTwinHy` conda env,复用 NVIDIA ICD 环境变量,但不要改 RLinf `.venv`。
