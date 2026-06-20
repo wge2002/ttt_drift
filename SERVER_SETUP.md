@@ -333,6 +333,19 @@ ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy \
 bash scripts/setup_robotwin_hy26_stack.sh
 ```
 
+如果已经建到最后自检,但停在 `ModuleNotFoundError: No module named 'pkg_resources'`,不用重建。那是
+`setuptools` 太新导致 `sapien==3.0.1` 的旧 import 失败,直接修当前环境:
+
+```bash
+conda activate RoboTwinHy26
+python -m pip install "setuptools<81"
+python - <<'PY'
+import pkg_resources, sapien
+print("pkg_resources OK")
+print("sapien", sapien.__version__, sapien.__file__)
+PY
+```
+
 建完后先跑最小验证:
 
 ```bash

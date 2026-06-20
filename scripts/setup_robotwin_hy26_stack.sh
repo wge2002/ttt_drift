@@ -90,7 +90,9 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-jovyan}"
 mkdir -p "${XDG_RUNTIME_DIR}"
 
 echo "[pip] replacing torch/cuRobo/warp/SAPIEN stack in ${ENV_NAME}"
-python -m pip install -U pip setuptools wheel
+# SAPIEN 3.0.1 still imports pkg_resources. Newer setuptools builds may not
+# provide it, so keep setuptools on the last known-compatible major line.
+python -m pip install -U pip wheel "setuptools<81"
 python -m pip uninstall -y torch torchvision torchaudio nvidia-curobo curobo warp-lang sapien mplib || true
 python -m pip install --index-url https://download.pytorch.org/whl/cu124 \
     "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}"
@@ -146,6 +148,9 @@ print("torch         :", torch.__version__, torch.version.cuda, flush=True)
 
 import warp
 show("warp", warp)
+
+import pkg_resources  # noqa: F401
+print("pkg_resources: OK", flush=True)
 
 import sapien
 show("sapien", sapien)
