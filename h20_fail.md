@@ -11,6 +11,33 @@
 
 ---
 
+## 0. 当前统一结论(暂停点)
+
+截至 2026-06-20,旧 H20/Vulkan 结论和当前 Hy-VLA 测试要合并成下面这个判断:
+
+- **不是 H20 固件层禁用图形/Vulkan。** 同一个 Docker 中,RLinf `.venv` 已经能跑 RoboTwin rollout;
+  设置 NVIDIA ICD 后也能看到 `Render Well`。关键环境变量是
+  `VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json`,
+  `VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_icd.json`,
+  `NVIDIA_DRIVER_CAPABILITIES=all`。
+- **Hy-VLA 模型链路已经走通。** 当前 `RoboTwin_hy` 测试能加载
+  `/home/jovyan/code/wge/ttt_drift/ckpts/Hy-VLA-RoboTwin`,并进入 policy;
+  日志里已经看到 `[Hy-VLA] action summary: shape=(16,) ... finite=True`,说明模型能产出有限 action。
+- **剩余主 blocker 是 RoboTwin 的 EE action cuRobo 规划。** 失败点从 expert precheck/warmup 被逐步隔离后,
+  落在 `TASK_ENV.take_action(action, action_type="ee") -> curobo` 路径,典型报错是
+  `RuntimeError: CUDA driver error: an illegal instruction was encountered`。
+- **当前 `RoboTwinHy` 栈与 RLinf 成功栈不同。**
+  `RoboTwinHy` 是 `torch 2.4.1+cu121 / warp 1.12.0 / RoboTwin_hy source curobo`;
+  RLinf 是 `torch 2.6.0+cu124 / warp 1.11.1 / site-packages nvidia-curobo@a35a708...`。
+  因此后续更像是 cuRobo/Torch/Warp 栈兼容性问题,不是 SAPIEN 渲染或 Hy checkpoint 问题。
+- **下一步先暂停等待确认。** 如果继续,建议新建独立 conda 环境复刻 RLinf 已验证的
+  torch/cu124/warp/cuRobo 关键栈,不要继续污染 RLinf `.venv`,也不要把当前 `RoboTwinHy` 直接升级到不可回退状态。
+
+调试中遇到的 `No valid instructions found` 已通过 task name fallback patch 规避;`ffmpeg` 缺失是录像依赖,
+不是主链路 blocker。
+
+---
+
 ## 1. 环境(H20 那台)
 
 - host: `coder-workspace-brown-panther-85`,user `jovyan`

@@ -95,6 +95,19 @@ python scripts/diag_step0_mask.py --ckpt ./ckpts/Hy-VLA-RoboTwin --out step0_mas
 不是根因。但 **不要污染 RLinf `.venv`**。当前 Hy 测试应新建一个独立 conda 环境,只借用 RLinf
 成功经验里的 NVIDIA ICD 环境变量。
 
+当前暂停点的合并结论:
+
+- `RoboTwin_hy` 路径名已经是当前测试路径,不是旧 `RoboTwin`。
+- 渲染/SAPIEN 不是当前主问题:日志已经能到 `Render Well`,RLinf `.venv` 也在同 Docker/H20 上跑通过
+  RoboTwin rollout。
+- Hy 模型也不是当前主问题:checkpoint 能加载,policy 已进入推理,并且已经看到
+  `[Hy-VLA] action summary: shape=(16,) ... finite=True`。
+- 剩余主 blocker 是 `TASK_ENV.take_action(action_type="ee") -> curobo` 的 CUDA illegal instruction。
+  这条路径在当前 `RoboTwinHy` 的 `torch 2.4.1+cu121 / warp 1.12.0 / RoboTwin_hy source curobo`
+  栈上不稳;RLinf 的可用对照是 `torch 2.6.0+cu124 / warp 1.11.1 / site-packages nvidia-curobo`。
+- 因此下一步先等确认。如果继续,优先新建隔离 conda env 复刻 RLinf 的关键 torch/cuRobo/warp 栈,
+  不直接改 RLinf `.venv`。
+
 ```bash
 # 系统库。如果已装过,apt 会直接跳过。
 sudo apt-get update
@@ -293,7 +306,62 @@ RoboTwinHy: torch 2.4.1+cu121 / warp 1.12.0 / RoboTwin_hy source curobo
 RLinf:      torch 2.6.0+cu124 / warp 1.11.1 / site-packages curobo
 ```
 
-下一步应新建独立环境复制 RLinf 已验证的 torch/cuRobo/warp 栈,而不是升级或污染 RLinf `.venv`。
+如果确认要继续,下一步应新建独立环境复制 RLinf 已验证的 torch/cuRobo/warp 栈,而不是升级或污染
+RLinf `.venv`。
+
+待确认后的候选做法是 clone 当前 `RoboTwinHy` 以保留 RoboTwin/SAPIEN 其他依赖,然后只替换 RLinf
+已验证的关键栈:
+
+```bash
+conda deactivate
+conda create -n RoboTwinHy26 --clone RoboTwinHy -y
+conda activate RoboTwinHy26
+
+# 恢复前面调试 patch 过的 RoboTwin 文件,从干净路径验证 cuRobo 栈。
+cp /home/jovyan/code/wge/RoboTwin_hy/script/eval_policy.py.hyvla_traceback.bak \
+  /home/jovyan/code/wge/RoboTwin_hy/script/eval_policy.py 2>/dev/null || true
+cp /home/jovyan/code/wge/RoboTwin_hy/envs/robot/planner.py.hyvla_no_graph.bak \
+  /home/jovyan/code/wge/RoboTwin_hy/envs/robot/planner.py 2>/dev/null || true
+
+pip uninstall -y torch torchvision torchaudio nvidia-curobo curobo warp-lang sapien mplib
+pip install --index-url https://download.pytorch.org/whl/cu124 \
+  torch==2.6.0 torchvision==0.21.0
+pip install numpy==1.26.4 numpy-quaternion==2024.0.13 \
+  sapien==3.0.1 mplib==0.2.1 warp-lang==1.11.1
+pip install "nvidia-curobo @ git+https://ghfast.top/https://github.com/NVlabs/curobo.git@a35a708ecfbb26eb9ab2d7ef22c65919c4fae4a9"
+
+# torch2.6 + py3.10 的 flash-attn wheel。如果 cp310 wheel 拉不到,换成同版本 cp311 的独立 py3.11 环境。
+pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+
+cd /home/jovyan/code/wge/ttt_drift
+pip install -e . --no-deps
+```
+
+验证一定要看到 `curobo` 来自 site-packages,而不是 `RoboTwin_hy/envs/curobo/src`:
+
+```bash
+python - <<'PY'
+import sys, torch, warp, curobo, sapien, mplib
+print("python", sys.executable)
+print("torch", torch.__version__, torch.version.cuda)
+print("warp", warp.__version__, warp.__file__)
+print("sapien", sapien.__version__, sapien.__file__)
+print("mplib", mplib.__version__, mplib.__file__)
+print("curobo", curobo.__file__)
+PY
+```
+
+若 `curobo` 仍指向 `/home/jovyan/code/wge/RoboTwin_hy/envs/curobo/src`,先查是谁把它插进路径:
+
+```bash
+python - <<'PY'
+import sys
+for p in sys.path:
+    if "curobo" in p.lower():
+        print(p)
+PY
+pip show nvidia-curobo curobo
+```
 
 判读:如果 SAPIEN smoke 通过,这张 H20/这个 Docker 就能跑 RoboTwin;后续失败应优先看 Hy-VLA
 依赖、checkpoint 路径或 adapter 参数,而不是再定性为 H20 固件/Vulkan 被禁。
