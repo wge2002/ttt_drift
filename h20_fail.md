@@ -257,6 +257,25 @@ CUDA_VISIBLE_DEVICES=0 \
 bash scripts/eval_robotwin_test.sh
 ```
 
+如果日志在 `TASK_ENV.setup_demo -> CuroboPlanner -> motion_gen.warmup()` 阶段报
+`RuntimeError: CUDA error: an illegal instruction was encountered`,这还没进入 Hy action 推理,
+是 cuRobo planner 的 CUDA kernel / CUDA graph warmup 问题。用下面的调试开关禁用 cuRobo CUDA graph
+后重试:
+
+```
+HYVLA_PATCH_ROBOTWIN_TRACEBACK=1 \
+HYVLA_PATCH_CUROBO_NO_GRAPH=1 \
+TASKS_OVERRIDE=adjust_bottle \
+TEST_NUM=1 \
+ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy \
+CKPT_PATH=/home/jovyan/code/wge/ttt_drift/ckpts/Hy-VLA-RoboTwin \
+CUDA_VISIBLE_DEVICES=0 \
+bash scripts/eval_robotwin_test.sh
+```
+
+该 patch 会备份并修改 `/home/jovyan/code/wge/RoboTwin_hy/envs/robot/planner.py`,备份文件名为
+`planner.py.hyvla_no_graph.bak`。
+
 判读:
 - 如果 5.4 通过,但 5.5 因 Hy-VLA import/权重/transformers 失败,说明 **RoboTwin/SAPIEN 环境可用**,
   需要修 Hy-VLA 依赖或 checkpoint 路径。

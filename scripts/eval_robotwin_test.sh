@@ -16,6 +16,7 @@
 #   TASKS_OVERRIDE optional whitespace-separated task list, e.g. "adjust_bottle"
 #   HYVLA_SKIP_PREFLIGHT 1 to skip Python import/dependency preflight
 #   HYVLA_PATCH_ROBOTWIN_TRACEBACK 1 to patch RoboTwin's swallowed exceptions
+#   HYVLA_PATCH_CUROBO_NO_GRAPH 1 to disable cuRobo CUDA graph warmup
 # =============================================================================
 
 set -euo pipefail
@@ -93,6 +94,11 @@ print(f"[Hy-VLA debug] Backup: {backup}", flush=True)
 PY
 fi
 
+if [ "${HYVLA_PATCH_CUROBO_NO_GRAPH:-0}" = "1" ]; then
+    python "${HY_VLA_DIR}/scripts/patch_robotwin_curobo_no_graph.py" \
+        --robotwin-dir "${ROBOTWIN_DIR}"
+fi
+
 mkdir -p "${LOG_DIR}"
 export PYTHONPATH="${HY_VLA_DIR}:${PYTHONPATH:-}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
@@ -124,6 +130,11 @@ if grep -q "traceback.print_exc()" "${ROBOTWIN_DIR}/script/eval_policy.py" 2>/de
     echo "RoboTwin trace : enabled"
 else
     echo "RoboTwin trace : disabled"
+fi
+if grep -q "use_cuda_graph=False" "${ROBOTWIN_DIR}/envs/robot/planner.py" 2>/dev/null; then
+    echo "cuRobo graph   : disabled"
+else
+    echo "cuRobo graph   : default"
 fi
 echo "========================================================"
 
