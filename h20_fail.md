@@ -150,6 +150,27 @@ python script/update_embodiment_config_path.py
 bash script/_download_assets.sh
 ```
 
+如果 `_download_assets.sh` 中途因为 HuggingFace SSL/网络断开失败,不要重跑完整 `_install.sh`。先只补缺的
+zip,再用 `unzip -n` 跳过已存在文件,避免交互式 `replace ... [y/n/A/N]` 卡住:
+
+```
+conda activate RoboTwinHy
+cd /home/jovyan/code/wge/RoboTwin_hy
+
+# 例:日志里缺的是 embodiments.zip。
+export HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+huggingface-cli download TianxingChen/RoboTwin2.0 embodiments.zip \
+  --repo-type dataset \
+  --local-dir /home/jovyan/code/wge/RoboTwin_hy/assets \
+  --resume-download
+
+cd /home/jovyan/code/wge/RoboTwin_hy/assets
+unzip -n embodiments.zip
+
+cd /home/jovyan/code/wge/RoboTwin_hy
+python script/update_embodiment_config_path.py
+```
+
 PyTorch3D 可能从源码编译。`Building wheel for pytorch3d` 长时间无输出时,先看是否有
 `cc1plus`/`nvcc` 占 CPU;有就不是卡死:
 
