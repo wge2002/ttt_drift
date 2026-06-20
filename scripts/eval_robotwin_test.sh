@@ -18,6 +18,7 @@
 #   HYVLA_PATCH_ROBOTWIN_TRACEBACK 1 to patch RoboTwin's swallowed exceptions
 #   HYVLA_PATCH_CUROBO_NO_GRAPH 1 to disable cuRobo CUDA graph warmup
 #   HYVLA_PATCH_CUROBO_SKIP_WARMUP 1 to skip cuRobo warmup calls entirely
+#   HYVLA_PATCH_SKIP_EXPERT_CHECK 1 to skip RoboTwin expert play_once precheck
 # =============================================================================
 
 set -euo pipefail
@@ -95,6 +96,11 @@ print(f"[Hy-VLA debug] Backup: {backup}", flush=True)
 PY
 fi
 
+if [ "${HYVLA_PATCH_SKIP_EXPERT_CHECK:-0}" = "1" ]; then
+    python "${HY_VLA_DIR}/scripts/patch_robotwin_skip_expert_check.py" \
+        --robotwin-dir "${ROBOTWIN_DIR}"
+fi
+
 if [ "${HYVLA_PATCH_CUROBO_NO_GRAPH:-0}" = "1" ] || [ "${HYVLA_PATCH_CUROBO_SKIP_WARMUP:-0}" = "1" ]; then
     patch_args=(--robotwin-dir "${ROBOTWIN_DIR}")
     if [ "${HYVLA_PATCH_CUROBO_SKIP_WARMUP:-0}" = "1" ]; then
@@ -144,6 +150,11 @@ if grep -q "skip cuRobo warmup" "${ROBOTWIN_DIR}/envs/robot/planner.py" 2>/dev/n
     echo "cuRobo warmup  : skipped"
 else
     echo "cuRobo warmup  : default"
+fi
+if grep -q "skip expert play_once" "${ROBOTWIN_DIR}/script/eval_policy.py" 2>/dev/null; then
+    echo "Expert precheck: skipped"
+else
+    echo "Expert precheck: default"
 fi
 echo "========================================================"
 

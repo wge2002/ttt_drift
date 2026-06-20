@@ -263,6 +263,23 @@ bash scripts/eval_robotwin_test.sh
 该 patch 会备份并修改 `/home/jovyan/code/wge/RoboTwin_hy/envs/robot/planner.py`,备份文件名为
 `planner.py.hyvla_no_graph.bak`。
 
+如果跳过 warmup 后又在 `TASK_ENV.play_once()` 的专家轨迹规划里报同类 cuRobo/CUDA illegal instruction,
+说明 RoboTwin 的专家 seed/instruction 预检查仍在走 cuRobo,还没进入 Hy policy。用下面的开关跳过
+专家预检查,直接进入 policy rollout,并用 task name 作为 fallback instruction:
+
+```bash
+HYVLA_PATCH_ROBOTWIN_TRACEBACK=1 \
+HYVLA_PATCH_SKIP_EXPERT_CHECK=1 \
+HYVLA_PATCH_CUROBO_NO_GRAPH=1 \
+HYVLA_PATCH_CUROBO_SKIP_WARMUP=1 \
+TASKS_OVERRIDE=adjust_bottle \
+TEST_NUM=1 \
+ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy \
+CKPT_PATH=/home/jovyan/code/wge/ttt_drift/ckpts/Hy-VLA-RoboTwin \
+CUDA_VISIBLE_DEVICES=0 \
+bash scripts/eval_robotwin_test.sh
+```
+
 判读:如果 SAPIEN smoke 通过,这张 H20/这个 Docker 就能跑 RoboTwin;后续失败应优先看 Hy-VLA
 依赖、checkpoint 路径或 adapter 参数,而不是再定性为 H20 固件/Vulkan 被禁。
 
