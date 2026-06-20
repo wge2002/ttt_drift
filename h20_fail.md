@@ -203,6 +203,11 @@ pip install "git+https://github.com/huggingface/transformers@9293856c419762ebf98
 pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
 ```
 
+安装 Hy 依赖时 pip 可能提示 `hy-vla requires torch>=2.7`、`accelerate/deepspeed/... is not installed`。
+这是因为本仓库 `pyproject.toml` 记录的是完整训练栈,而 RoboTwin eval 需要保留 RoboTwin 的
+`torch==2.4.1`/SAPIEN/mplib/curobo 栈。这里不要为消除这些 resolver warning 去升级 torch 或补训练依赖。
+真正必须通过的是下面 preflight 里的 `flash_attn = True` 和 `hy_vla import OK`。
+
 ### 5.3 环境记录 + import preflight
 ```
 which python
