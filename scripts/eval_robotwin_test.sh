@@ -21,6 +21,7 @@
 #   HYVLA_PATCH_CUROBO_DISABLE_LBFGS_KERNEL 1 to disable fused LBFGS kernels
 #   HYVLA_PATCH_CUROBO_V2_API 1 to patch old RoboTwin cuRobo imports
 #   HYVLA_PATCH_SKIP_EXPERT_CHECK 1 to skip RoboTwin expert play_once precheck
+#   HYVLA_PATCH_TEST_NUM 0 to skip patching RoboTwin's hard-coded test_num
 #   HYVLA_REQUIRE_SITE_CUROBO 1 to fail if cuRobo imports from RoboTwin source
 #   HYVLA_REQUIRE_SOURCE_CUROBO 1 to fail unless cuRobo imports from RoboTwin source
 # =============================================================================
@@ -57,6 +58,11 @@ SEED=${SEED:-10000}
 
 # --------- 4. Symlink robotwin_eval/ -> RoboTwin/policy/hy_vla (idempotent) ---
 ln -sfn "${HY_VLA_DIR}/robotwin_eval" "${ROBOTWIN_DIR}/policy/hy_vla"
+
+if [ "${HYVLA_PATCH_TEST_NUM:-1}" = "1" ]; then
+    python "${HY_VLA_DIR}/scripts/patch_robotwin_test_num.py" \
+        --robotwin-dir "${ROBOTWIN_DIR}"
+fi
 
 if [ "${HYVLA_PATCH_ROBOTWIN_TRACEBACK:-0}" = "1" ]; then
     ROBOTWIN_EVAL_POLICY="${ROBOTWIN_DIR}/script/eval_policy.py"
@@ -175,6 +181,11 @@ if grep -q "skip expert play_once" "${ROBOTWIN_DIR}/script/eval_policy.py" 2>/de
     echo "Expert precheck: skipped"
 else
     echo "Expert precheck: default"
+fi
+if grep -q 'usr_args.get("test_num"' "${ROBOTWIN_DIR}/script/eval_policy.py" 2>/dev/null; then
+    echo "test_num patch : enabled"
+else
+    echo "test_num patch : disabled"
 fi
 if grep -q "from curobo.types import Pose as CuroboPose" "${ROBOTWIN_DIR}/envs/robot/planner.py" 2>/dev/null; then
     echo "cuRobo API     : v2 import fallback"

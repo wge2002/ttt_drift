@@ -383,6 +383,10 @@ CUDA_VISIBLE_DEVICES=0 \
 bash scripts/eval_robotwin_test.sh
 ```
 
+注意:`scripts/eval_robotwin_test.sh` 会默认 patch RoboTwin 的 `script/eval_policy.py`,把上游写死的
+`test_num = 100` 改成读取命令行 `--test_num`。否则即使 wrapper banner 显示 `Rollouts/task : 1`,
+RoboTwin 内部仍会继续跑到 `2/2`、`3/3` 甚至更多。
+
 脚本内部等价做法是 clone 当前 `RoboTwinHy` 以保留 RoboTwin/SAPIEN 其他依赖,然后只替换关键
 torch/warp 栈并重装 RoboTwin source cuRobo:
 
