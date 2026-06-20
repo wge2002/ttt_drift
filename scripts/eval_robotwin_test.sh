@@ -17,6 +17,7 @@
 #   HYVLA_SKIP_PREFLIGHT 1 to skip Python import/dependency preflight
 #   HYVLA_PATCH_ROBOTWIN_TRACEBACK 1 to patch RoboTwin's swallowed exceptions
 #   HYVLA_PATCH_CUROBO_NO_GRAPH 1 to disable cuRobo CUDA graph warmup
+#   HYVLA_PATCH_CUROBO_SKIP_WARMUP 1 to skip cuRobo warmup calls entirely
 # =============================================================================
 
 set -euo pipefail
@@ -94,9 +95,12 @@ print(f"[Hy-VLA debug] Backup: {backup}", flush=True)
 PY
 fi
 
-if [ "${HYVLA_PATCH_CUROBO_NO_GRAPH:-0}" = "1" ]; then
-    python "${HY_VLA_DIR}/scripts/patch_robotwin_curobo_no_graph.py" \
-        --robotwin-dir "${ROBOTWIN_DIR}"
+if [ "${HYVLA_PATCH_CUROBO_NO_GRAPH:-0}" = "1" ] || [ "${HYVLA_PATCH_CUROBO_SKIP_WARMUP:-0}" = "1" ]; then
+    patch_args=(--robotwin-dir "${ROBOTWIN_DIR}")
+    if [ "${HYVLA_PATCH_CUROBO_SKIP_WARMUP:-0}" = "1" ]; then
+        patch_args+=(--skip-warmup)
+    fi
+    python "${HY_VLA_DIR}/scripts/patch_robotwin_curobo_no_graph.py" "${patch_args[@]}"
 fi
 
 mkdir -p "${LOG_DIR}"
@@ -135,6 +139,11 @@ if grep -q "use_cuda_graph=False" "${ROBOTWIN_DIR}/envs/robot/planner.py" 2>/dev
     echo "cuRobo graph   : disabled"
 else
     echo "cuRobo graph   : default"
+fi
+if grep -q "skip cuRobo warmup" "${ROBOTWIN_DIR}/envs/robot/planner.py" 2>/dev/null; then
+    echo "cuRobo warmup  : skipped"
+else
+    echo "cuRobo warmup  : default"
 fi
 echo "========================================================"
 

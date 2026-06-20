@@ -259,12 +259,13 @@ bash scripts/eval_robotwin_test.sh
 
 如果日志在 `TASK_ENV.setup_demo -> CuroboPlanner -> motion_gen.warmup()` 阶段报
 `RuntimeError: CUDA error: an illegal instruction was encountered`,这还没进入 Hy action 推理,
-是 cuRobo planner 的 CUDA kernel / CUDA graph warmup 问题。用下面的调试开关禁用 cuRobo CUDA graph
+是 cuRobo planner warmup 的 CUDA/TorchScript kernel 问题。先用下面的调试开关跳过 cuRobo warmup
 后重试:
 
 ```
 HYVLA_PATCH_ROBOTWIN_TRACEBACK=1 \
 HYVLA_PATCH_CUROBO_NO_GRAPH=1 \
+HYVLA_PATCH_CUROBO_SKIP_WARMUP=1 \
 TASKS_OVERRIDE=adjust_bottle \
 TEST_NUM=1 \
 ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy \
