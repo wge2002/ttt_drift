@@ -294,6 +294,10 @@ CUDA_VISIBLE_DEVICES=0 \
 bash scripts/eval_robotwin_test.sh
 ```
 
+如果日志出现 `Episode 0: No valid instructions found` / `IndexError: list index out of range`,说明旧 patch
+只跳过了 expert check,但没有替换 instruction 生成行;重新 `git pull` 后用同一条命令再跑即可,新的
+`HYVLA_PATCH_SKIP_EXPERT_CHECK=1` 会把空 instruction list 回退成 task name。
+
 判读:
 - 如果 5.4 通过,但 5.5 因 Hy-VLA import/权重/transformers 失败,说明 **RoboTwin/SAPIEN 环境可用**,
   需要修 Hy-VLA 依赖或 checkpoint 路径。

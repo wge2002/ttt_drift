@@ -30,22 +30,22 @@ def patch_eval_policy(path: Path) -> None:
             "    episode_info = {'info': {}}  # Hy-VLA debug: fallback when expert_check is skipped\n",
         )
 
-    old = (
-        '    episode_info_list = [episode_info["info"]]\n'
-        '    results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)\n'
-        "    instruction = np.random.choice(results[0][instruction_type])\n"
-    )
-    new = (
-        "    try:\n"
-        '        episode_info_list = [episode_info["info"]]\n'
-        '        results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)\n'
-        "        instruction = np.random.choice(results[0][instruction_type])\n"
-        "    except Exception:\n"
-        '        instruction = args["task_name"].replace("_", " ")\n'
-        '        print(f"[Hy-VLA debug] fallback instruction: {instruction}", flush=True)\n'
-    )
-    if old in patched and "[Hy-VLA debug] fallback instruction" not in patched:
-        patched = patched.replace(old, new)
+    if "[Hy-VLA debug] fallback instruction" not in patched:
+        lines = patched.splitlines(keepends=True)
+        out = []
+        for line in lines:
+            if line.strip() == "instruction = np.random.choice(results[0][instruction_type])":
+                indent = line[: len(line) - len(line.lstrip())]
+                out.append(f"{indent}try:\n")
+                out.append(f"{indent}    instruction = np.random.choice(results[0][instruction_type])\n")
+                out.append(f"{indent}except Exception:\n")
+                out.append(f'{indent}    instruction = args["task_name"].replace("_", " ")\n')
+                out.append(
+                    f'{indent}    print(f"[Hy-VLA debug] fallback instruction: {{instruction}}", flush=True)\n'
+                )
+            else:
+                out.append(line)
+        patched = "".join(out)
 
     if patched == text:
         print(f"[Hy-VLA debug] expert-check skip patch already applied: {path}")

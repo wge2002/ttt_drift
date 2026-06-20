@@ -280,6 +280,10 @@ CUDA_VISIBLE_DEVICES=0 \
 bash scripts/eval_robotwin_test.sh
 ```
 
+如果日志出现 `Episode 0: No valid instructions found` / `IndexError: list index out of range`,说明旧 patch
+只跳过了 expert check,但没有替换 instruction 生成行;重新 `git pull` 后用同一条命令再跑即可,新的
+`HYVLA_PATCH_SKIP_EXPERT_CHECK=1` 会把空 instruction list 回退成 task name。
+
 判读:如果 SAPIEN smoke 通过,这张 H20/这个 Docker 就能跑 RoboTwin;后续失败应优先看 Hy-VLA
 依赖、checkpoint 路径或 adapter 参数,而不是再定性为 H20 固件/Vulkan 被禁。
 
