@@ -15,6 +15,7 @@
 #   LOG_DIR        <HY_VLA_DIR>/eval_logs
 #   TASKS_OVERRIDE optional whitespace-separated task list, e.g. "adjust_bottle"
 #   HYVLA_SKIP_PREFLIGHT 1 to skip Python import/dependency preflight
+#   HYVLA_PATCH_ROBOTWIN_TRACEBACK 1 to patch RoboTwin's swallowed exceptions
 # =============================================================================
 
 set -euo pipefail
@@ -50,6 +51,48 @@ SEED=${SEED:-10000}
 # --------- 4. Symlink robotwin_eval/ -> RoboTwin/policy/hy_vla (idempotent) ---
 ln -sfn "${HY_VLA_DIR}/robotwin_eval" "${ROBOTWIN_DIR}/policy/hy_vla"
 
+if [ "${HYVLA_PATCH_ROBOTWIN_TRACEBACK:-0}" = "1" ]; then
+    ROBOTWIN_EVAL_POLICY="${ROBOTWIN_DIR}/script/eval_policy.py"
+    python - "${ROBOTWIN_EVAL_POLICY}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+if "traceback.print_exc()" in text:
+    print(f"[Hy-VLA debug] RoboTwin traceback patch already present: {path}", flush=True)
+    raise SystemExit(0)
+
+backup = path.with_suffix(path.suffix + ".hyvla_traceback.bak")
+if not backup.exists():
+    backup.write_text(text)
+
+lines = text.splitlines(keepends=True)
+out = []
+inserted = False
+imported = False
+for line in lines:
+    out.append(line)
+    stripped = line.strip()
+    if stripped == "import traceback" or stripped.startswith("import traceback,"):
+        imported = True
+    if stripped.startswith("import ") and not imported:
+        out.append("import traceback\n")
+        imported = True
+    if "error occurs" in line and "print" in line:
+        indent = line[: len(line) - len(line.lstrip())]
+        out.append(f"{indent}traceback.print_exc()\n")
+        inserted = True
+
+if not inserted:
+    raise SystemExit(f"[Hy-VLA debug] Did not find 'error occurs' print in {path}")
+
+path.write_text("".join(out))
+print(f"[Hy-VLA debug] Patched RoboTwin traceback printing: {path}", flush=True)
+print(f"[Hy-VLA debug] Backup: {backup}", flush=True)
+PY
+fi
+
 mkdir -p "${LOG_DIR}"
 export PYTHONPATH="${HY_VLA_DIR}:${PYTHONPATH:-}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
@@ -70,6 +113,18 @@ echo "RoboTwin dir  : ${ROBOTWIN_DIR}"
 echo "Log dir       : ${LOG_DIR}"
 echo "Vulkan ICD    : ${VK_ICD_FILENAMES:-<unset>}"
 echo "Driver caps   : ${NVIDIA_DRIVER_CAPABILITIES:-<unset>}"
+echo "Hy-VLA git    : $(git -C "${HY_VLA_DIR}" rev-parse --short HEAD 2>/dev/null || echo '<unknown>')"
+echo "Policy link   : $(readlink -f "${ROBOTWIN_DIR}/policy/hy_vla" 2>/dev/null || echo '<unresolved>')"
+if grep -q "Exception inside RoboTwin eval hook" "${ROBOTWIN_DIR}/policy/hy_vla/deploy_policy.py" 2>/dev/null; then
+    echo "Hook traceback : enabled"
+else
+    echo "Hook traceback : MISSING"
+fi
+if grep -q "traceback.print_exc()" "${ROBOTWIN_DIR}/script/eval_policy.py" 2>/dev/null; then
+    echo "RoboTwin trace : enabled"
+else
+    echo "RoboTwin trace : disabled"
+fi
 echo "========================================================"
 
 # --------- 6. Hy-VLA import/dependency preflight ---------
