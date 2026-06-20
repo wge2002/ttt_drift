@@ -284,6 +284,17 @@ bash scripts/eval_robotwin_test.sh
 只跳过了 expert check,但没有替换 instruction 生成行;重新 `git pull` 后用同一条命令再跑即可,新的
 `HYVLA_PATCH_SKIP_EXPERT_CHECK=1` 会把空 instruction list 回退成 task name。
 
+如果已经看到 `[Hy-VLA] action summary: shape=(16,) ... finite=True`,说明 Hy policy 已经产出 action。
+后续若仍在 `TASK_ENV.take_action(action_type="ee") -> curobo` 中报 CUDA illegal instruction,不要继续
+patch 这条环境。当前已知对照:
+
+```text
+RoboTwinHy: torch 2.4.1+cu121 / warp 1.12.0 / RoboTwin_hy source curobo
+RLinf:      torch 2.6.0+cu124 / warp 1.11.1 / site-packages curobo
+```
+
+下一步应新建独立环境复制 RLinf 已验证的 torch/cuRobo/warp 栈,而不是升级或污染 RLinf `.venv`。
+
 判读:如果 SAPIEN smoke 通过,这张 H20/这个 Docker 就能跑 RoboTwin;后续失败应优先看 Hy-VLA
 依赖、checkpoint 路径或 adapter 参数,而不是再定性为 H20 固件/Vulkan 被禁。
 

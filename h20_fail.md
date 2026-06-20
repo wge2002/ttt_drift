@@ -335,8 +335,27 @@ VK_LOADER_DEBUG=all VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json vulkaninf
 
 ## 6. 当前判断
 
-另一台卡上 Hy 原始测试已跑通;同一 H20 Docker 中 RLinf RoboTwin rollout 也已跑通。综合判断:
+另一台卡上 Hy 原始测试已跑通;同一 H20 Docker 中 RLinf RoboTwin rollout 也已跑通。2026-06-20 对照结果:
+
+```
+RoboTwinHy:
+  python  /home/jovyan/miniconda3/envs/RoboTwinHy/bin/python
+  torch   2.4.1+cu121, torch.version.cuda 12.1
+  warp    1.12.0
+  curobo  /home/jovyan/code/wge/RoboTwin_hy/envs/curobo/src/curobo
+
+RLinf .venv:
+  python  /home/jovyan/code/wge/RLinf/.venv/bin/python
+  torch   2.6.0+cu124, torch.version.cuda 12.4
+  warp    1.11.1
+  curobo  /home/jovyan/code/wge/RLinf/.venv/lib/python3.11/site-packages/curobo
+```
+
+综合判断:
 
 - **H20 这张卡/这个 Docker 可以跑 RoboTwin。**
 - 旧 `h20_fail.md` 的固件级定性已经过期。
-- Hy 的下一步应新建独立 `RoboTwinHy` conda env,复用 NVIDIA ICD 环境变量,但不要改 RLinf `.venv`。
+- Hy-VLA policy 本身已能 load 并产出 finite `(16,)` action。
+- 当前 blocker 是 `RoboTwinHy` 的 cuRobo 执行 EE action 时在 H20 上触发 CUDA illegal instruction。
+- 不要继续 patch torch2.4/cu121/warp1.12/source-curobo 这条环境;下一步应新建独立环境,复制 RLinf 已验证的
+  torch2.6/cu124/warp1.11/site-packages-curobo 栈,但不要直接污染 RLinf `.venv`。
