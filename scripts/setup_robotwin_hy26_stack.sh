@@ -13,6 +13,7 @@ TORCHVISION_VERSION=${TORCHVISION_VERSION:-0.21.0}
 WARP_VERSION=${WARP_VERSION:-1.11.1}
 SAPIEN_VERSION=${SAPIEN_VERSION:-3.0.1}
 MPLIB_VERSION=${MPLIB_VERSION:-0.2.1}
+CUROBO_MODE=${CUROBO_MODE:-robotwin_source}
 CUROBO_REF=${CUROBO_REF:-a35a708ecfbb26eb9ab2d7ef22c65919c4fae4a9}
 CUROBO_SPEC=${CUROBO_SPEC:-"nvidia-curobo @ git+https://ghfast.top/https://github.com/NVlabs/curobo.git@${CUROBO_REF}"}
 FLASH_ATTN_URL=${FLASH_ATTN_URL:-"https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl"}
@@ -102,7 +103,26 @@ python -m pip install \
     "sapien==${SAPIEN_VERSION}" \
     "mplib==${MPLIB_VERSION}" \
     "warp-lang==${WARP_VERSION}"
-python -m pip install "${CUROBO_SPEC}"
+
+case "${CUROBO_MODE}" in
+    robotwin_source)
+        [ -d "${ROBOTWIN_DIR}/envs/curobo" ] || die "RoboTwin cuRobo source not found: ${ROBOTWIN_DIR}/envs/curobo"
+        export CUDA_HOME="${CUDA_HOME:-${CONDA_PREFIX}}"
+        export PATH="${CUDA_HOME}/bin:${PATH}"
+        export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-9.0}"
+        export FORCE_CUDA="${FORCE_CUDA:-1}"
+        export MAX_JOBS="${MAX_JOBS:-4}"
+        echo "[pip] installing RoboTwin source cuRobo against the new torch stack"
+        python -m pip install -e "${ROBOTWIN_DIR}/envs/curobo" --no-build-isolation --no-deps
+        ;;
+    site)
+        echo "[pip] installing site-packages nvidia-curobo: ${CUROBO_SPEC}"
+        python -m pip install "${CUROBO_SPEC}"
+        ;;
+    *)
+        die "unknown CUROBO_MODE=${CUROBO_MODE}; use robotwin_source or site"
+        ;;
+esac
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
     echo "[conda] ffmpeg binary missing; installing into ${ENV_NAME}"
@@ -130,7 +150,7 @@ if [ "${HYVLA_REBUILD_PYTORCH3D:-0}" = "1" ]; then
         --no-build-isolation
 fi
 
-export HY_VLA_DIR ROBOTWIN_DIR ENV_NAME BASE_ENV
+export HY_VLA_DIR ROBOTWIN_DIR ENV_NAME BASE_ENV CUROBO_MODE
 python - <<'PY'
 import importlib.util
 import os
@@ -164,11 +184,27 @@ show("curobo", curobo)
 robotwin_dir = os.environ["ROBOTWIN_DIR"]
 source_curobo = os.path.abspath(os.path.join(robotwin_dir, "envs", "curobo", "src"))
 curobo_file = os.path.abspath(getattr(curobo, "__file__", ""))
-if curobo_file.startswith(source_curobo):
+expect_source = os.environ.get("CUROBO_MODE") == "robotwin_source"
+if expect_source and not curobo_file.startswith(source_curobo):
+    raise SystemExit(
+        "curobo is not importing from RoboTwin source tree: "
+        + curobo_file
+    )
+if not expect_source and curobo_file.startswith(source_curobo):
     raise SystemExit(
         "curobo still imports from RoboTwin source tree, expected site-packages: "
         + curobo_file
     )
+
+if expect_source:
+    required_curobo = [
+        "curobo.types.math",
+        "curobo.types.robot",
+        "curobo.wrap.reacher.motion_gen",
+    ]
+    missing_curobo = [name for name in required_curobo if importlib.util.find_spec(name) is None]
+    if missing_curobo:
+        raise SystemExit("missing RoboTwin planner cuRobo module(s): " + ", ".join(missing_curobo))
 
 missing = [
     name
@@ -198,7 +234,10 @@ Done. Next quick test:
 
 conda activate ${ENV_NAME}
 cd ${HY_VLA_DIR}
-HYVLA_REQUIRE_SITE_CUROBO=1 \\
+HYVLA_REQUIRE_SOURCE_CUROBO=1 \\
+HYVLA_PATCH_ROBOTWIN_TRACEBACK=1 \\
+HYVLA_PATCH_CUROBO_NO_GRAPH=1 \\
+HYVLA_PATCH_CUROBO_DISABLE_LBFGS_KERNEL=1 \\
 TASKS_OVERRIDE=adjust_bottle \\
 TEST_NUM=1 \\
 ROBOTWIN_DIR=${ROBOTWIN_DIR} \\

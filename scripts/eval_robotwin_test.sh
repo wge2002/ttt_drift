@@ -18,8 +18,11 @@
 #   HYVLA_PATCH_ROBOTWIN_TRACEBACK 1 to patch RoboTwin's swallowed exceptions
 #   HYVLA_PATCH_CUROBO_NO_GRAPH 1 to disable cuRobo CUDA graph warmup
 #   HYVLA_PATCH_CUROBO_SKIP_WARMUP 1 to skip cuRobo warmup calls entirely
+#   HYVLA_PATCH_CUROBO_DISABLE_LBFGS_KERNEL 1 to disable fused LBFGS kernels
+#   HYVLA_PATCH_CUROBO_V2_API 1 to patch old RoboTwin cuRobo imports
 #   HYVLA_PATCH_SKIP_EXPERT_CHECK 1 to skip RoboTwin expert play_once precheck
 #   HYVLA_REQUIRE_SITE_CUROBO 1 to fail if cuRobo imports from RoboTwin source
+#   HYVLA_REQUIRE_SOURCE_CUROBO 1 to fail unless cuRobo imports from RoboTwin source
 # =============================================================================
 
 set -euo pipefail
@@ -102,10 +105,20 @@ if [ "${HYVLA_PATCH_SKIP_EXPERT_CHECK:-0}" = "1" ]; then
         --robotwin-dir "${ROBOTWIN_DIR}"
 fi
 
-if [ "${HYVLA_PATCH_CUROBO_NO_GRAPH:-0}" = "1" ] || [ "${HYVLA_PATCH_CUROBO_SKIP_WARMUP:-0}" = "1" ]; then
+if [ "${HYVLA_PATCH_CUROBO_V2_API:-0}" = "1" ]; then
+    python "${HY_VLA_DIR}/scripts/patch_robotwin_curobo_v2_api.py" \
+        --robotwin-dir "${ROBOTWIN_DIR}"
+fi
+
+if [ "${HYVLA_PATCH_CUROBO_NO_GRAPH:-0}" = "1" ] \
+    || [ "${HYVLA_PATCH_CUROBO_SKIP_WARMUP:-0}" = "1" ] \
+    || [ "${HYVLA_PATCH_CUROBO_DISABLE_LBFGS_KERNEL:-0}" = "1" ]; then
     patch_args=(--robotwin-dir "${ROBOTWIN_DIR}")
     if [ "${HYVLA_PATCH_CUROBO_SKIP_WARMUP:-0}" = "1" ]; then
         patch_args+=(--skip-warmup)
+    fi
+    if [ "${HYVLA_PATCH_CUROBO_DISABLE_LBFGS_KERNEL:-0}" = "1" ]; then
+        patch_args+=(--disable-lbfgs-cuda-kernel)
     fi
     python "${HY_VLA_DIR}/scripts/patch_robotwin_curobo_no_graph.py" "${patch_args[@]}"
 fi
@@ -153,12 +166,23 @@ if grep -q "skip cuRobo warmup" "${ROBOTWIN_DIR}/envs/robot/planner.py" 2>/dev/n
 else
     echo "cuRobo warmup  : default"
 fi
+if grep -q "disable cuRobo fused LBFGS CUDA kernel" "${ROBOTWIN_DIR}/envs/robot/planner.py" 2>/dev/null; then
+    echo "cuRobo LBFGS   : CUDA kernel disabled"
+else
+    echo "cuRobo LBFGS   : default"
+fi
 if grep -q "skip expert play_once" "${ROBOTWIN_DIR}/script/eval_policy.py" 2>/dev/null; then
     echo "Expert precheck: skipped"
 else
     echo "Expert precheck: default"
 fi
+if grep -q "from curobo.types import Pose as CuroboPose" "${ROBOTWIN_DIR}/envs/robot/planner.py" 2>/dev/null; then
+    echo "cuRobo API     : v2 import fallback"
+else
+    echo "cuRobo API     : default imports"
+fi
 echo "Require site cuRobo: ${HYVLA_REQUIRE_SITE_CUROBO:-0}"
+echo "Require source cuRobo: ${HYVLA_REQUIRE_SOURCE_CUROBO:-0}"
 echo "========================================================"
 
 # --------- 6. Hy-VLA import/dependency preflight ---------
@@ -221,6 +245,29 @@ if robotwin_dir and os.path.abspath(curobo_file).startswith(os.path.abspath(sour
         print("ERROR:", msg, flush=True)
         raise SystemExit(1)
     print("WARNING:", msg, flush=True)
+elif os.environ.get("HYVLA_REQUIRE_SOURCE_CUROBO") == "1":
+    print(
+        "ERROR: cuRobo is not importing from RoboTwin source tree: "
+        f"{curobo_file}",
+        flush=True,
+    )
+    raise SystemExit(1)
+
+curobo_modules = [
+    "curobo.types",
+    "curobo.types.math",
+    "curobo.types.robot",
+    "curobo.wrap.reacher.motion_gen",
+    "curobo.cuda_robot_model.cuda_robot_model",
+    "curobo.geom.sdf.world",
+]
+for name in curobo_modules:
+    try:
+        spec = importlib.util.find_spec(name)
+    except (ImportError, ModuleNotFoundError, AttributeError) as exc:
+        print(f"{name:<44}: <missing> ({exc})", flush=True)
+    else:
+        print(f"{name:<44}: {spec.origin if spec else '<missing>'}", flush=True)
 
 missing = [
     name

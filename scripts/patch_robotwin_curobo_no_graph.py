@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Patch RoboTwin's cuRobo planner around CUDA warmup issues.
+"""Patch RoboTwin's cuRobo planner around H20/H800 CUDA planner issues.
 
 This is a local debugging/workaround patch for H20/Hopper CUDA illegal
-instruction failures inside cuRobo's planner warmup. It edits
+instruction failures inside cuRobo's planner warmup/trajopt. It edits
 ``<ROBOTWIN_DIR>/envs/robot/planner.py`` in place and saves a backup next to it.
 """
 
@@ -84,7 +84,43 @@ def _skip_warmup_lines(text: str) -> tuple[str, int]:
     return "".join(out), count
 
 
-def patch_planner(planner_path: Path, *, skip_warmup: bool) -> None:
+def _patch_lbfgs_cuda_kernel(text: str) -> tuple[str, int]:
+    marker = "Hy-VLA debug: disable cuRobo fused LBFGS CUDA kernel"
+    if marker in text:
+        return text, 0
+
+    needle = "    class CuroboPlanner:"
+    patch_indent = "    "
+    if needle not in text:
+        needle = "class CuroboPlanner:"
+        patch_indent = ""
+    if needle not in text:
+        return text, 0
+
+    patch = f"""{patch_indent}# {marker}
+{patch_indent}from curobo.opt.newton.lbfgs import LBFGSOpt
+
+{patch_indent}_hyvla_orig_lbfgs_init = LBFGSOpt.__init__
+
+{patch_indent}def _hyvla_lbfgs_init(self, config=None):
+{patch_indent}    if config is not None and hasattr(config, "use_cuda_kernel"):
+{patch_indent}        config.use_cuda_kernel = False
+{patch_indent}    _hyvla_orig_lbfgs_init(self, config)
+{patch_indent}    if hasattr(self, "use_cuda_kernel"):
+{patch_indent}        self.use_cuda_kernel = False
+
+{patch_indent}LBFGSOpt.__init__ = _hyvla_lbfgs_init
+
+"""
+    return text.replace(needle, patch + needle, 1), 1
+
+
+def patch_planner(
+    planner_path: Path,
+    *,
+    skip_warmup: bool,
+    disable_lbfgs_cuda_kernel: bool,
+) -> None:
     text = planner_path.read_text()
     backup = planner_path.with_suffix(planner_path.suffix + ".hyvla_no_graph.bak")
     if not backup.exists():
@@ -111,6 +147,10 @@ def patch_planner(planner_path: Path, *, skip_warmup: bool) -> None:
     if skip_warmup:
         patched, skip_count = _skip_warmup_lines(patched)
 
+    lbfgs_count = 0
+    if disable_lbfgs_cuda_kernel:
+        patched, lbfgs_count = _patch_lbfgs_cuda_kernel(patched)
+
     if patched == text:
         print(f"[Hy-VLA debug] cuRobo no-graph patch already applied: {planner_path}")
     else:
@@ -119,6 +159,7 @@ def patch_planner(planner_path: Path, *, skip_warmup: bool) -> None:
         print(f"[Hy-VLA debug] MotionGenConfig calls patched: {config_count}")
         print(f"[Hy-VLA debug] warmup calls patched: {warmup_count}")
         print(f"[Hy-VLA debug] warmup calls skipped: {skip_count}")
+        print(f"[Hy-VLA debug] LBFGS CUDA kernel patches: {lbfgs_count}")
     print(f"[Hy-VLA debug] Backup: {backup}")
 
 
@@ -126,11 +167,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--robotwin-dir", required=True)
     parser.add_argument("--skip-warmup", action="store_true")
+    parser.add_argument("--disable-lbfgs-cuda-kernel", action="store_true")
     args = parser.parse_args()
     planner_path = Path(args.robotwin_dir) / "envs" / "robot" / "planner.py"
     if not planner_path.exists():
         raise SystemExit(f"planner.py not found: {planner_path}")
-    patch_planner(planner_path, skip_warmup=args.skip_warmup)
+    patch_planner(
+        planner_path,
+        skip_warmup=args.skip_warmup,
+        disable_lbfgs_cuda_kernel=args.disable_lbfgs_cuda_kernel,
+    )
 
 
 if __name__ == "__main__":

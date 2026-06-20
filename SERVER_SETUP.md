@@ -306,12 +306,13 @@ RoboTwinHy: torch 2.4.1+cu121 / warp 1.12.0 / RoboTwin_hy source curobo
 RLinf:      torch 2.6.0+cu124 / warp 1.11.1 / site-packages curobo
 ```
 
-如果确认要继续,下一步应新建独立环境复制 RLinf 已验证的 torch/cuRobo/warp 栈,而不是升级或污染
-RLinf `.venv`。
+如果确认要继续,下一步应新建独立环境复制 RLinf 已验证的 torch/cu124/warp 方向,但 cuRobo 仍使用
+RoboTwin_hy 自带的旧 API source 版本,而不是升级或污染 RLinf `.venv`。
 
 推荐直接用仓库脚本。它会 clone `RoboTwinHy -> RoboTwinHy26`,恢复前面调试 patch 过的 RoboTwin 文件,
-替换 torch/cuRobo/warp/SAPIEN/mplib 关键栈,安装 `ffmpeg`,最后检查 `curobo` 必须来自
-site-packages 而不是 `RoboTwin_hy/envs/curobo/src`。
+替换 torch/warp/SAPIEN/mplib 关键栈,安装 `ffmpeg`,并默认把 cuRobo 安装为
+`RoboTwin_hy/envs/curobo` 的旧 API source 版本。不要默认强制 site-packages `nvidia-curobo`:该 v0.8/v2
+布局和 RoboTwin_hy 的 planner 不兼容,会报 `curobo.types.math` 不存在。
 
 ```bash
 cd /home/jovyan/code/wge/ttt_drift
@@ -346,13 +347,34 @@ print("sapien", sapien.__version__, sapien.__file__)
 PY
 ```
 
+如果已经在 `RoboTwinHy26` 里装了 site-packages `nvidia-curobo`,并看到
+`No module named 'curobo.types.math'; 'curobo.types' is not a package`,不用重建整个环境。切回
+RoboTwin source cuRobo:
+
+```bash
+conda activate RoboTwinHy26
+export CUDA_HOME="${CONDA_PREFIX}"
+export PATH="${CUDA_HOME}/bin:${PATH}"
+export TORCH_CUDA_ARCH_LIST=9.0
+export FORCE_CUDA=1
+export MAX_JOBS=4
+
+python -m pip uninstall -y nvidia-curobo curobo
+python -m pip install -e /home/jovyan/code/wge/RoboTwin_hy/envs/curobo --no-build-isolation --no-deps
+
+python scripts/inspect_curobo_api.py
+```
+
 建完后先跑最小验证:
 
 ```bash
 conda activate RoboTwinHy26
 cd /home/jovyan/code/wge/ttt_drift
 
-HYVLA_REQUIRE_SITE_CUROBO=1 \
+HYVLA_REQUIRE_SOURCE_CUROBO=1 \
+HYVLA_PATCH_ROBOTWIN_TRACEBACK=1 \
+HYVLA_PATCH_CUROBO_NO_GRAPH=1 \
+HYVLA_PATCH_CUROBO_DISABLE_LBFGS_KERNEL=1 \
 TASKS_OVERRIDE=adjust_bottle \
 TEST_NUM=1 \
 ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy \
@@ -361,8 +383,8 @@ CUDA_VISIBLE_DEVICES=0 \
 bash scripts/eval_robotwin_test.sh
 ```
 
-脚本内部等价做法是 clone 当前 `RoboTwinHy` 以保留 RoboTwin/SAPIEN 其他依赖,然后只替换 RLinf
-已验证的关键栈:
+脚本内部等价做法是 clone 当前 `RoboTwinHy` 以保留 RoboTwin/SAPIEN 其他依赖,然后只替换关键
+torch/warp 栈并重装 RoboTwin source cuRobo:
 
 ```bash
 conda deactivate
@@ -380,7 +402,7 @@ pip install --index-url https://download.pytorch.org/whl/cu124 \
   torch==2.6.0 torchvision==0.21.0
 pip install numpy==1.26.4 numpy-quaternion==2024.0.13 \
   sapien==3.0.1 mplib==0.2.1 warp-lang==1.11.1
-pip install "nvidia-curobo @ git+https://ghfast.top/https://github.com/NVlabs/curobo.git@a35a708ecfbb26eb9ab2d7ef22c65919c4fae4a9"
+pip install -e /home/jovyan/code/wge/RoboTwin_hy/envs/curobo --no-build-isolation --no-deps
 
 # torch2.6 + py3.10 的 flash-attn wheel。如果 cp310 wheel 拉不到,换成同版本 cp311 的独立 py3.11 环境。
 pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
@@ -389,7 +411,7 @@ cd /home/jovyan/code/wge/ttt_drift
 pip install -e . --no-deps
 ```
 
-验证一定要看到 `curobo` 来自 site-packages,而不是 `RoboTwin_hy/envs/curobo/src`:
+验证一定要看到 `curobo` 来自 `RoboTwin_hy/envs/curobo/src`,否则 RoboTwin_hy 的旧 planner API 不匹配:
 
 ```bash
 python - <<'PY'
@@ -403,7 +425,7 @@ print("curobo", curobo.__file__)
 PY
 ```
 
-若 `curobo` 仍指向 `/home/jovyan/code/wge/RoboTwin_hy/envs/curobo/src`,先查是谁把它插进路径:
+若 `curobo` 没有指向 `/home/jovyan/code/wge/RoboTwin_hy/envs/curobo/src`,先查是谁覆盖了路径:
 
 ```bash
 python - <<'PY'
