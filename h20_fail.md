@@ -127,6 +127,10 @@ export CC=/usr/bin/gcc-12
 export CXX=/usr/bin/g++-12
 export NVCC_PREPEND_FLAGS="-ccbin /usr/bin/g++-12"
 export TORCH_CUDA_ARCH_LIST="9.0"
+export FORCE_CUDA=1
+export MAX_JOBS=4
+export TMPDIR=/home/jovyan/tmp
+mkdir -p "${TMPDIR}"
 
 export ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy
 export CKPT_PATH=/home/jovyan/code/wge/ttt_drift/ckpts/Hy-VLA-RoboTwin
@@ -144,6 +148,23 @@ bash script/_install.sh
 python script/update_embodiment_config_path.py
 # assets 已经下载过可跳过;不确定就跑一遍。
 bash script/_download_assets.sh
+```
+
+PyTorch3D 可能从源码编译。`Building wheel for pytorch3d` 长时间无输出时,先看是否有
+`cc1plus`/`nvcc` 占 CPU;有就不是卡死:
+
+```
+ps -ef | egrep 'nvcc|cc1plus|c\+\+|ninja|pytorch3d' | grep -v grep
+top -u jovyan
+```
+
+如果想先绕过源码编译,可试官方 wheel 入口;命中则很快,不命中会报 `No matching distribution`:
+
+```
+pip uninstall -y pytorch3d
+pip install iopath
+pip install --no-index --no-cache-dir pytorch3d \
+  -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt241/download.html
 ```
 
 把 Hy-VLA 装进同一个 conda env。注意 `--no-deps`:不要让 pyproject 升级/替换 RoboTwin 刚装好的
