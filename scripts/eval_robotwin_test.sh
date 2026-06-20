@@ -13,6 +13,7 @@
 #   ROBOTWIN_DIR   /path/to/RoboTwin
 #   HY_VLA_DIR     parent of this script
 #   LOG_DIR        <HY_VLA_DIR>/eval_logs
+#   TASKS_OVERRIDE optional whitespace-separated task list, e.g. "adjust_bottle"
 # =============================================================================
 
 set -euo pipefail
@@ -26,14 +27,18 @@ CKPT_PATH=${CKPT_PATH:-/path/to/Hy-VLA-RoboTwin}
 LOG_DIR=${LOG_DIR:-"${HY_VLA_DIR}/eval_logs"}
 
 # --------- 2. Fixed first-6 task list (regression subset) ---------
-TASKS=(
-    adjust_bottle
-    beat_block_hammer
-    blocks_ranking_rgb
-    blocks_ranking_size
-    click_alarmclock
-    click_bell
-)
+if [ -n "${TASKS_OVERRIDE:-}" ]; then
+    read -r -a TASKS <<<"${TASKS_OVERRIDE}"
+else
+    TASKS=(
+        adjust_bottle
+        beat_block_hammer
+        blocks_ranking_rgb
+        blocks_ranking_size
+        click_alarmclock
+        click_bell
+    )
+fi
 
 # --------- 3. RoboTwin eval_policy.py invariants for Hy-VLA ---------
 CKPT_SETTING=Hy-VLA-RoboTwin
@@ -47,6 +52,11 @@ ln -sfn "${HY_VLA_DIR}/robotwin_eval" "${ROBOTWIN_DIR}/policy/hy_vla"
 mkdir -p "${LOG_DIR}"
 export PYTHONPATH="${HY_VLA_DIR}:${PYTHONPATH:-}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.4
+export NVIDIA_DRIVER_CAPABILITIES="${NVIDIA_DRIVER_CAPABILITIES:-all}"
+if [ -f /etc/vulkan/icd.d/nvidia_icd.json ]; then
+    export VK_ICD_FILENAMES="${VK_ICD_FILENAMES:-/etc/vulkan/icd.d/nvidia_icd.json}"
+    export VK_DRIVER_FILES="${VK_DRIVER_FILES:-/etc/vulkan/icd.d/nvidia_icd.json}"
+fi
 
 # --------- 5. Banner ---------
 echo "========================================================"
@@ -57,6 +67,8 @@ echo "GPU           : ${CUDA_VISIBLE_DEVICES}"
 echo "Ckpt path     : ${CKPT_PATH}"
 echo "RoboTwin dir  : ${ROBOTWIN_DIR}"
 echo "Log dir       : ${LOG_DIR}"
+echo "Vulkan ICD    : ${VK_ICD_FILENAMES:-<unset>}"
+echo "Driver caps   : ${NVIDIA_DRIVER_CAPABILITIES:-<unset>}"
 echo "========================================================"
 
 # --------- 6. Sequential evaluation loop ---------

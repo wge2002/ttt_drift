@@ -1,16 +1,24 @@
-# H20 workspace — RoboTwin/SAPIEN Vulkan 失败复盘 + 复现流程
+# H20 workspace — RoboTwin/SAPIEN Vulkan 旧失败复盘 + RLinf 成功修正
 
-> 目的:记录在 coder-workspace(H20)容器上把 RoboTwin 装通、但 **SAPIEN 渲染因 Vulkan 不可用而失败** 的全过程、路径、诊断结论,以及一套可在新窗口重跑的复现/排查流程。
-> 结论先行:**NVIDIA Vulkan 在这台 H20 容器里建不出实例(`vkCreateInstance` → `ERROR_INCOMPATIBLE_DRIVER`),用户态拼图全对也没用,容器内修不了。** 已改用 A100 机器 `fnii-vla2`(渲染正常)。
+> 目的:记录在 coder-workspace(H20)容器上旧 `conda RoboTwin` 环境里遇到的
+> RoboTwin/SAPIEN Vulkan 失败,并保留一套轻量复核流程。
+>
+> **2026-06-20 修正:**同一个 H20 Docker 里,RLinf 的 `.venv` 已经能跑通
+> RoboTwin rollout。因此,下面旧结论中“这台 H20/固件层禁用 Vulkan、容器内修不了”
+> 已经不成立。现在更合理的判断是:**H20 卡和当前 Docker 可以跑 RoboTwin;此前失败更可能来自
+> 被删掉的 `conda RoboTwin` 环境、Vulkan ICD/driver capabilities 环境变量、或 SAPIEN/mplib/CUDA
+> 依赖栈差异。**
 
 ---
 
 ## 1. 环境(H20 那台)
 
 - host: `coder-workspace-brown-panther-85`,user `jovyan`
-- 代码:`/home/jovyan/code/wge/ttt_drift`;RoboTwin:`/home/jovyan/code/wge/RoboTwin`
+- 代码:`/home/jovyan/code/wge/ttt_drift`
+- 旧 RoboTwin 路径:`/home/jovyan/code/wge/RoboTwin`;当前 Hy 测试路径:`/home/jovyan/code/wge/RoboTwin_hy`
+- 已知可跑通的环境:`/home/jovyan/code/wge/RLinf/.venv`
 - 离线实验(step0/step1)环境:uv,Python 3.11
-- RoboTwin 环境:conda env `RoboTwin`,Python 3.10,torch 2.4.1+cu121
+- 旧失败环境:conda env `RoboTwin`,Python 3.10,torch 2.4.1+cu121(已删除)
 - GPU:8× NVIDIA **H20Z**,driver **570.124.06**(NVIDIA 开源内核模块),虚拟化模式 **Pass-Through**
 
 ---
@@ -63,7 +71,7 @@ sudo apt install -y libgl1 libglib2.0-0 libgomp1
 
 ---
 
-## 3. 真正的 blocker:Vulkan 建不出实例
+## 3. 旧失败观测:Vulkan 建不出实例
 
 绕开 RoboTwin 直接测 SAPIEN 渲染,拿到底层错误:
 
@@ -79,7 +87,7 @@ ERROR_INCOMPATIBLE_DRIVER
 
 ---
 
-## 4. 为什么排除了所有常见原因(诊断 + 观测结论)
+## 4. 旧诊断:当时排除过的常见原因
 
 | 怀疑点 | 检查命令 | H20 上的结果 | 是否元凶 |
 |---|---|---|---|
@@ -93,16 +101,53 @@ ERROR_INCOMPATIBLE_DRIVER
 | implicit layer 干扰 | `VK_LOADER_LAYERS_DISABLE='*'` 重试 | 仍报错(那是无关的 `VK_LAYER_NV_optimus`) | 否 |
 | 软件 Vulkan 兜底 | `VK_ICD_FILENAMES=.../lvp_icd.json`(lavapipe)跑 SAPIEN | 能建实例,但 SAPIEN 需 Vulkan-CUDA 互操作扩展 → `ErrorExtensionNotPresent` | 不可用 |
 
-**结论:用户态(驱动版本、设备节点、DRM 节点、ICD、能力位)全部正确,NVIDIA 驱动本身就是建不出 Vulkan 实例。** 最可能是 **H20 在固件/hypervisor 层禁用了图形/Vulkan**,或该容器里开源内核模块对 H20 的 Vulkan 支持不全。非 pip/apt/json 能解决。
+**旧结论已降级为历史假设。** RLinf `.venv` 在同一个 Docker 中跑通 RoboTwin 后,这些观测只能说明
+当时那套 `conda RoboTwin` 运行路径没有正确初始化 NVIDIA Vulkan,不能再推出 H20 固件/平台层不支持
+RoboTwin。
 
 ---
 
-## 5. 复现流程(新窗口照此重跑,确认/继续排查根因)
+## 5. 更新后的轻量确认流程
 
-### 5.1 复现失败(应当稳定复现)
+目标不是重新做完整 benchmark,而是确认“这张 H20 + 这个 Docker 能不能跑 RoboTwin 渲染”。只要下面
+`vulkaninfo`、SAPIEN smoke、以及可选的 1-task/1-rollout Hy eval 通过,就可以判定前面的失败是环境设置问题。
+
+### 5.1 使用已跑通的 RLinf `.venv`
 ```
-conda activate RoboTwin
-export XDG_RUNTIME_DIR=/tmp/xdg-root && mkdir -p $XDG_RUNTIME_DIR
+source /home/jovyan/code/wge/RLinf/.venv/bin/activate
+cd /home/jovyan/code/wge/ttt_drift
+
+export ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy
+export CKPT_PATH=/home/jovyan/code/wge/ttt_drift/ckpts/Hy-VLA-RoboTwin
+export PYTHONPATH=/home/jovyan/code/wge/ttt_drift:${ROBOTWIN_DIR}:${PYTHONPATH:-}
+export VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
+export VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_icd.json
+export NVIDIA_DRIVER_CAPABILITIES=all
+export XDG_RUNTIME_DIR=/tmp/xdg-jovyan
+mkdir -p "${XDG_RUNTIME_DIR}"
+```
+
+### 5.2 环境对比/记录
+```
+which python
+python - <<'PY'
+import os, torch
+print("torch", torch.__version__, torch.version.cuda)
+for name in ["CONDA_PREFIX", "VIRTUAL_ENV", "CUDA_HOME", "LD_LIBRARY_PATH",
+             "VK_ICD_FILENAMES", "VK_DRIVER_FILES", "NVIDIA_DRIVER_CAPABILITIES"]:
+    print(name, "=", os.environ.get(name))
+try:
+    import sapien
+    print("sapien", sapien.__file__)
+except Exception as exc:
+    print("sapien import failed:", repr(exc))
+PY
+```
+
+### 5.3 Vulkan/SAPIEN smoke
+```
+vulkaninfo --summary 2>&1 | sed -n '1,80p'
+
 python - <<'PY'
 import sapien
 sapien.set_log_level("info")
@@ -111,16 +156,25 @@ c = s.add_camera("c",128,128,1.0,0.01,100); s.update_render(); c.take_picture()
 print("RENDER OK", c.get_picture("Color").shape)
 PY
 ```
-预期:`RuntimeError: failed to find a rendering device`。
 
-### 5.2 拿底层 Vulkan 错误
-```
-sudo apt-get install -y vulkan-tools
-vulkaninfo --summary 2>&1 | head -40
-```
-预期:`Could not get 'vkCreateInstance' ... libGLX_nvidia.so.0` / `Found no drivers!` / `ERROR_INCOMPATIBLE_DRIVER`。
+预期:`vulkaninfo` 能看到 NVIDIA ICD/device,且 Python 输出 `RENDER OK ...`。
 
-### 5.3 全套诊断(确认用户态都正常)
+### 5.4 可选:Hy 原始测试的最小 rollout
+```
+TASKS_OVERRIDE=adjust_bottle \
+TEST_NUM=1 \
+ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy \
+CKPT_PATH=/home/jovyan/code/wge/ttt_drift/ckpts/Hy-VLA-RoboTwin \
+CUDA_VISIBLE_DEVICES=0 \
+bash scripts/eval_robotwin_test.sh
+```
+
+判读:
+- 如果 5.3 通过,但 5.4 因 Hy-VLA import/权重/transformers 失败,说明 **RoboTwin/SAPIEN 环境可用**,
+  需要修 Hy-VLA 依赖或 checkpoint 路径。
+- 如果 5.3 在 RLinf `.venv` 里也失败,再回到 Vulkan loader/ICD 排查。
+
+### 5.5 只有 smoke 失败时才需要的 Vulkan 诊断
 ```
 nvidia-smi -L
 cat /proc/driver/nvidia/version
@@ -133,7 +187,7 @@ cat /etc/vulkan/icd.d/nvidia_icd.json
 nvidia-smi -q | grep -iE "Virtualization|vGPU|MIG|Compute Mode|GSP"
 ```
 
-### 5.4 还想往根因挖,可继续试的方向
+### 5.6 还想往根因挖,可继续试的方向
 - **完整 loader 跟踪**(看协商在哪断、是否 dlopen 了次级库失败):
 ```
 VK_LOADER_DEBUG=all VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json vulkaninfo 2>&1 | sed -n '1,120p'
@@ -141,13 +195,19 @@ VK_LOADER_DEBUG=all VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json vulkaninf
 - **看 GPU 是否报告图形能力 / 有无错误**:`nvidia-smi -q | grep -iE "Graphics|ECC|Fabric|Persistence"`;`dmesg 2>/dev/null | grep -i nvidia | tail -40`(可能无权限)。
 - **换一块 GPU 试**:`CUDA_VISIBLE_DEVICES=1 vulkaninfo --summary`(各卡逐一)。
 - **更新 Vulkan loader**:系统 `libvulkan1` 是 1.3.275,可试装更新的 loader 再协商。
-- **最终判定手段**:同样的 5.1 在一台**普通直通 GPU(A100/4090 等)**上能 `RENDER OK`(已在 `fnii-vla2` 验证),则坐实是 **H20 这台容器/固件**的问题,而非代码或 RoboTwin。
+- **最终判定手段**:同样的 5.3 在 RLinf `.venv` 可 `RENDER OK`,而旧 conda 不行,则坐实是
+  **旧 Python/依赖/ICD 运行路径**的问题,而非 H20 卡本身。
 
-### 5.5 给平台方的诉求(若要他们修)
-> H20 直通容器内 NVIDIA Vulkan 无法初始化:`vkCreateInstance` 返回 `ERROR_INCOMPATIBLE_DRIVER`(driver 570.124.06,kernel=userspace 一致,`/dev/nvidia*`、`/dev/nvidia-modeset`、`/dev/dri/renderD*` 均在,`NVIDIA_DRIVER_CAPABILITIES=all`,Pass-Through)。CUDA 正常但 Vulkan 离屏渲染不可用。请确认 H20 是否在固件/驱动层禁用了图形,或提供 Vulkan 可用的镜像/节点(SAPIEN/RoboTwin 仿真渲染需要)。
+### 5.7 给平台方的诉求(仅当 RLinf `.venv` smoke 也失败时)
+旧版诉求不应再直接发送。只有在当前 RLinf `.venv` 的 5.3 也稳定失败时,再整理新的 `vulkaninfo`
+和 SAPIEN smoke 日志给平台方。
 
 ---
 
-## 6. 可用替代:A100 机器 `fnii-vla2`(GPU01)
+## 6. 当前判断
 
-同样的 5.1 在该机 `RENDER OK`。RoboTwin eval 已在该机跑通(详见 `SERVER_SETUP.md` / 项目记忆)。结论:**问题定位在 H20 容器的 Vulkan,不在代码。**
+另一台卡上 Hy 原始测试已跑通;同一 H20 Docker 中 RLinf RoboTwin rollout 也已跑通。综合判断:
+
+- **H20 这张卡/这个 Docker 可以跑 RoboTwin。**
+- 旧 `h20_fail.md` 的固件级定性已经过期。
+- Hy 的下一步应复用 RLinf `.venv` 和 NVIDIA ICD 环境,不要重建已删除的旧 `conda RoboTwin`。

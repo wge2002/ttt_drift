@@ -88,6 +88,74 @@ python scripts/diag_step0_mask.py --ckpt ./ckpts/Hy-VLA-RoboTwin --out step0_mas
 ## 5. 完整 RoboTwin eval(需要单独装 RoboTwin 2.0 模拟器)
 
 `robotwin_eval/` 只是适配器;真正跑要有 RoboTwin 2.0 仓库 + 其仿真依赖(SAPIEN 等)。安装见官方 [RoboTwin-Platform/RoboTwin](https://github.com/RoboTwin-Platform/RoboTwin):
+
+### 5.0 H20 当前推荐路径:复用 RLinf `.venv` + `RoboTwin_hy`
+
+2026-06-20 更新:同一个 H20 Docker 中,RLinf 的 `.venv` 已经能跑通 RoboTwin rollout。因此不要再按旧
+`conda RoboTwin` 环境复现;当前 Hy 测试优先复用 RLinf `.venv`,并显式指定 NVIDIA ICD:
+
+```bash
+source /home/jovyan/code/wge/RLinf/.venv/bin/activate
+cd /home/jovyan/code/wge/ttt_drift
+
+export ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy
+export CKPT_PATH=/home/jovyan/code/wge/ttt_drift/ckpts/Hy-VLA-RoboTwin
+export PYTHONPATH=/home/jovyan/code/wge/ttt_drift:${ROBOTWIN_DIR}:${PYTHONPATH:-}
+export VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
+export VK_DRIVER_FILES=/etc/vulkan/icd.d/nvidia_icd.json
+export NVIDIA_DRIVER_CAPABILITIES=all
+export XDG_RUNTIME_DIR=/tmp/xdg-jovyan
+mkdir -p "${XDG_RUNTIME_DIR}"
+```
+
+先做不加载 Hy 权重的环境 smoke:
+
+```bash
+which python
+python - <<'PY'
+import os, torch
+print("torch", torch.__version__, torch.version.cuda)
+for name in ["VIRTUAL_ENV", "CUDA_HOME", "VK_ICD_FILENAMES", "VK_DRIVER_FILES", "NVIDIA_DRIVER_CAPABILITIES"]:
+    print(name, "=", os.environ.get(name))
+import sapien
+print("sapien", sapien.__file__)
+PY
+
+vulkaninfo --summary 2>&1 | sed -n '1,80p'
+
+python - <<'PY'
+import sapien
+sapien.set_log_level("info")
+s = sapien.Scene(); s.add_ground(-1); s.set_ambient_light([0.5, 0.5, 0.5])
+c = s.add_camera("c", 128, 128, 1.0, 0.01, 100)
+s.update_render(); c.take_picture()
+print("RENDER OK", c.get_picture("Color").shape)
+PY
+```
+
+如果 `import hy_vla` 失败,先把本仓库装进这个 `.venv`:
+
+```bash
+pip install -e /home/jovyan/code/wge/ttt_drift
+python -c "import hy_vla; print('hy_vla import OK')"
+```
+
+确认 Hy 原始测试路径时,只跑 1 个 task × 1 rollout 即可:
+
+```bash
+TASKS_OVERRIDE=adjust_bottle \
+TEST_NUM=1 \
+ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy \
+CKPT_PATH=/home/jovyan/code/wge/ttt_drift/ckpts/Hy-VLA-RoboTwin \
+CUDA_VISIBLE_DEVICES=0 \
+bash scripts/eval_robotwin_test.sh
+```
+
+判读:如果 SAPIEN smoke 通过,这张 H20/这个 Docker 就能跑 RoboTwin;后续失败应优先看 Hy-VLA
+依赖、checkpoint 路径或 adapter 参数,而不是再定性为 H20 固件/Vulkan 被禁。
+
+### 5.1 从零安装 RoboTwin env(通用路径;H20 上不再优先推荐)
+
 ```bash
 sudo apt install libvulkan1 mesa-vulkan-drivers vulkan-tools
 conda create -n RoboTwin python=3.10 -y
@@ -108,7 +176,7 @@ python -c "import hy_vla; print('hy_vla import OK')"
 
 原版回归(`local` bug 已在仓库内修好,无需 sed;`eval_robotwin_test.sh` 会自动把本仓库 symlink 进 `RoboTwin/policy/hy_vla`):
 ```bash
-ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin CKPT_PATH=$(pwd)/ckpts/Hy-VLA-RoboTwin CUDA_VISIBLE_DEVICES=0 TEST_NUM=10 bash scripts/eval_robotwin_test.sh
+ROBOTWIN_DIR=/home/jovyan/code/wge/RoboTwin_hy CKPT_PATH=$(pwd)/ckpts/Hy-VLA-RoboTwin CUDA_VISIBLE_DEVICES=0 TEST_NUM=10 bash scripts/eval_robotwin_test.sh
 ```
 全量(50 任务 ×100 rollout,很慢):`bash scripts/eval_robotwin_full.sh`(同样 env 变量)。
 
