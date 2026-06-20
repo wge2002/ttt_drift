@@ -32,6 +32,7 @@ RoboTwin policy slot) and point ``--config`` at the bundled
 
 from __future__ import annotations
 
+import traceback
 from typing import Any
 
 import numpy as np
@@ -110,15 +111,36 @@ def eval(TASK_ENV, model: HyVLAPolicyWrapper, observation: dict[str, Any]) -> No
     the wrapper for one 16-d action, and forward it back via
     ``TASK_ENV.take_action(..., action_type='ee')``.
     """
-    instruction = TASK_ENV.get_instruction()
-    batch = encode_obs(observation, instruction)
-    action = model.get_action(batch)
-    TASK_ENV.take_action(action, action_type="ee")
+    action = None
+    try:
+        instruction = TASK_ENV.get_instruction()
+        batch = encode_obs(observation, instruction)
+        action = model.get_action(batch)
+        TASK_ENV.take_action(action, action_type="ee")
+    except Exception:
+        print("[Hy-VLA] Exception inside RoboTwin eval hook:", flush=True)
+        if action is None:
+            print("[Hy-VLA] action was not produced before the exception.", flush=True)
+        else:
+            print(
+                "[Hy-VLA] action summary:",
+                f"shape={getattr(action, 'shape', None)}",
+                f"dtype={getattr(action, 'dtype', None)}",
+                f"finite={bool(np.isfinite(action).all())}",
+                flush=True,
+            )
+        traceback.print_exc()
+        raise
 
 
 def reset_model(model: HyVLAPolicyWrapper) -> str:
     """Per-episode reset hook."""
-    return model.reset()
+    try:
+        return model.reset()
+    except Exception:
+        print("[Hy-VLA] Exception inside RoboTwin reset hook:", flush=True)
+        traceback.print_exc()
+        raise
 
 
 __all__ = ["encode_obs", "get_model", "eval", "reset_model"]
