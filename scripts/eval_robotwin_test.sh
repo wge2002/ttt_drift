@@ -14,6 +14,7 @@
 #   HY_VLA_DIR     parent of this script
 #   LOG_DIR        <HY_VLA_DIR>/eval_logs
 #   TASKS_OVERRIDE optional whitespace-separated task list, e.g. "adjust_bottle"
+#   HYVLA_SKIP_PREFLIGHT 1 to skip Python import/dependency preflight
 # =============================================================================
 
 set -euo pipefail
@@ -71,7 +72,56 @@ echo "Vulkan ICD    : ${VK_ICD_FILENAMES:-<unset>}"
 echo "Driver caps   : ${NVIDIA_DRIVER_CAPABILITIES:-<unset>}"
 echo "========================================================"
 
-# --------- 6. Sequential evaluation loop ---------
+# --------- 6. Hy-VLA import/dependency preflight ---------
+if [ "${HYVLA_SKIP_PREFLIGHT:-0}" != "1" ]; then
+    python - <<'PY'
+import importlib.util
+import sys
+
+print("Python        :", sys.executable, flush=True)
+
+try:
+    import transformers
+except Exception as exc:
+    print("transformers import failed:", repr(exc), flush=True)
+    raise SystemExit(1)
+
+print(
+    "transformers  :",
+    getattr(transformers, "__version__", "<unknown>"),
+    getattr(transformers, "__file__", "<unknown>"),
+    flush=True,
+)
+
+missing = [
+    name
+    for name in ["transformers.modeling_layers", "timm", "flash_attn"]
+    if importlib.util.find_spec(name) is None
+]
+if missing:
+    print("Missing Hy-VLA runtime module(s):", ", ".join(missing), flush=True)
+    print(
+        'Install at least: pip install -U "transformers>=4.57,<4.58" '
+        'safetensors "huggingface-hub>=0.23" timm==1.0.21',
+        flush=True,
+    )
+    print(
+        "If flash_attn is missing too, install the wheel matching this Python/Torch/CUDA env.",
+        flush=True,
+    )
+    raise SystemExit(1)
+
+try:
+    import hy_vla  # noqa: F401
+except Exception as exc:
+    print("hy_vla import failed:", repr(exc), flush=True)
+    raise
+
+print("Hy-VLA import : OK", flush=True)
+PY
+fi
+
+# --------- 7. Sequential evaluation loop ---------
 n_done=0
 n_failed=0
 for task in "${TASKS[@]}"; do

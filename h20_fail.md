@@ -127,15 +127,33 @@ export XDG_RUNTIME_DIR=/tmp/xdg-jovyan
 mkdir -p "${XDG_RUNTIME_DIR}"
 ```
 
-### 5.2 环境对比/记录
+### 5.2 补 Hy 推理依赖并记录环境
+不要在 RLinf `.venv` 里直接跑完整 `requirements.txt`,以免重装 torch/SAPIEN/RoboTwin 相关栈。
+只补 Hy import 所需的最小 runtime deps:
+
+```
+pip install -U "transformers>=4.57,<4.58" safetensors "huggingface-hub>=0.23" timm==1.0.21
+pip install -e /home/jovyan/code/wge/ttt_drift
+```
+
+如果后面检查显示 `flash_attn` 缺失,再按当前 Python/Torch/CUDA 安装匹配 wheel;Python 3.11 +
+torch 2.6/cu12 且 ABI=false 时可用:
+
+```
+pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+```
+
 ```
 which python
 python - <<'PY'
-import os, torch
+import importlib.util, os, torch, transformers
 print("torch", torch.__version__, torch.version.cuda)
+print("transformers", transformers.__version__, transformers.__file__)
 for name in ["CONDA_PREFIX", "VIRTUAL_ENV", "CUDA_HOME", "LD_LIBRARY_PATH",
              "VK_ICD_FILENAMES", "VK_DRIVER_FILES", "NVIDIA_DRIVER_CAPABILITIES"]:
     print(name, "=", os.environ.get(name))
+for name in ["transformers.modeling_layers", "timm", "flash_attn"]:
+    print(name, "=", importlib.util.find_spec(name) is not None)
 try:
     import sapien
     print("sapien", sapien.__file__)
@@ -145,10 +163,13 @@ PY
 ```
 
 ### 5.3 Vulkan/SAPIEN smoke
+`vulkaninfo` 能列出 NVIDIA H20Z 就说明 ICD 选择已经对。裸 SAPIEN smoke 只做 90 秒限时检查;
+如果它超时,但后面的 RoboTwin eval 打印 `Render Well`,以 RoboTwin 的真实路径为准。
+
 ```
 vulkaninfo --summary 2>&1 | sed -n '1,80p'
 
-python - <<'PY'
+timeout 90s python - <<'PY'
 import sapien
 sapien.set_log_level("info")
 s = sapien.Scene(); s.add_ground(-1); s.set_ambient_light([0.5,0.5,0.5])
@@ -157,7 +178,8 @@ print("RENDER OK", c.get_picture("Color").shape)
 PY
 ```
 
-预期:`vulkaninfo` 能看到 NVIDIA ICD/device,且 Python 输出 `RENDER OK ...`。
+预期:`vulkaninfo` 能看到 NVIDIA ICD/device。若 Python 输出 `RENDER OK ...`,裸 SAPIEN 也通过;
+若只在 RoboTwin eval 中看到 `Render Well`,也足以说明真实 eval 渲染链路通过。
 
 ### 5.4 可选:Hy 原始测试的最小 rollout
 ```

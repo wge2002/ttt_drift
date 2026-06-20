@@ -108,7 +108,33 @@ export XDG_RUNTIME_DIR=/tmp/xdg-jovyan
 mkdir -p "${XDG_RUNTIME_DIR}"
 ```
 
-先做不加载 Hy 权重的环境 smoke:
+先把 Hy 推理侧 runtime deps 补进这个 `.venv`。这里不跑完整 `requirements.txt`,避免把 RLinf
+环境里的 torch/SAPIEN/RoboTwin 栈洗掉:
+
+```bash
+pip install -U "transformers>=4.57,<4.58" safetensors "huggingface-hub>=0.23" timm==1.0.21
+pip install -e /home/jovyan/code/wge/ttt_drift
+python - <<'PY'
+import importlib.util, sys, torch, transformers
+print("python", sys.executable)
+print("torch", torch.__version__, torch.version.cuda)
+print("transformers", transformers.__version__, transformers.__file__)
+for name in ["transformers.modeling_layers", "timm", "flash_attn"]:
+    print(name, "=", importlib.util.find_spec(name) is not None)
+import hy_vla
+print("hy_vla import OK")
+PY
+```
+
+如果 `flash_attn = False`,再按当前 Python/Torch 安装匹配 wheel。RLinf 现有环境若是 Python 3.11 +
+torch 2.6/cu12 且 ABI=false,常用 wheel 是:
+
+```bash
+pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+```
+
+再做不加载 Hy 权重的环境 smoke。`vulkaninfo` 能列出 NVIDIA H20Z 就已经说明 Vulkan ICD 选对了;
+裸 SAPIEN smoke 只保留为 90 秒限时检查,不要无限等:
 
 ```bash
 which python
@@ -123,7 +149,7 @@ PY
 
 vulkaninfo --summary 2>&1 | sed -n '1,80p'
 
-python - <<'PY'
+timeout 90s python - <<'PY'
 import sapien
 sapien.set_log_level("info")
 s = sapien.Scene(); s.add_ground(-1); s.set_ambient_light([0.5, 0.5, 0.5])
@@ -133,12 +159,8 @@ print("RENDER OK", c.get_picture("Color").shape)
 PY
 ```
 
-如果 `import hy_vla` 失败,先把本仓库装进这个 `.venv`:
-
-```bash
-pip install -e /home/jovyan/code/wge/ttt_drift
-python -c "import hy_vla; print('hy_vla import OK')"
-```
+如果这个裸 SAPIEN smoke 超时,但后面的 RoboTwin eval 打印了 `Render Well`,以 RoboTwin 的结果为准;
+那条路径更接近真实任务。
 
 确认 Hy 原始测试路径时,只跑 1 个 task × 1 rollout 即可:
 
