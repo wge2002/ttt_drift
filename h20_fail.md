@@ -11,7 +11,7 @@
 
 ---
 
-## 0. 当前统一结论(暂停点)
+## 0. 当前统一结论
 
 截至 2026-06-20,旧 H20/Vulkan 结论和当前 Hy-VLA 测试要合并成下面这个判断:
 
@@ -23,18 +23,69 @@
 - **Hy-VLA 模型链路已经走通。** 当前 `RoboTwin_hy` 测试能加载
   `/home/jovyan/code/wge/ttt_drift/ckpts/Hy-VLA-RoboTwin`,并进入 policy;
   日志里已经看到 `[Hy-VLA] action summary: shape=(16,) ... finite=True`,说明模型能产出有限 action。
-- **剩余主 blocker 是 RoboTwin 的 EE action cuRobo 规划。** 失败点从 expert precheck/warmup 被逐步隔离后,
-  落在 `TASK_ENV.take_action(action, action_type="ee") -> curobo` 路径,典型报错是
-  `RuntimeError: CUDA driver error: an illegal instruction was encountered`。
+- **原主 blocker 是 RoboTwin 的 EE action cuRobo 规划,现在已有稳定 workaround。** 失败点曾从
+  expert precheck/warmup 被逐步隔离到 `TASK_ENV.take_action(action, action_type="ee") -> curobo`,
+  典型报错是 `RuntimeError: CUDA driver error: an illegal instruction was encountered`。当前通过
+  `RoboTwinHy26` + torch2.6/cu124 + warp1.11 + RoboTwin source cuRobo + 关闭 cuRobo graph/LBFGS fused
+  kernel 已经跑通。
 - **当前 `RoboTwinHy` 栈与 RLinf 成功栈不同。**
   `RoboTwinHy` 是 `torch 2.4.1+cu121 / warp 1.12.0 / RoboTwin_hy source curobo`;
   RLinf 是 `torch 2.6.0+cu124 / warp 1.11.1 / site-packages nvidia-curobo@a35a708...`。
   因此后续更像是 cuRobo/Torch/Warp 栈兼容性问题,不是 SAPIEN 渲染或 Hy checkpoint 问题。
-- **下一步先暂停等待确认。** 如果继续,建议新建独立 conda 环境复刻 RLinf 已验证的
-  torch/cu124/warp/cuRobo 关键栈,不要继续污染 RLinf `.venv`,也不要把当前 `RoboTwinHy` 直接升级到不可回退状态。
+- **当前剩余问题是速度,不是可运行性。** 单 rollout 约 7-9 分钟,适合 smoke/regression,不适合直接串行
+  全量 benchmark;后续应优化 cuRobo workaround、减少 rollout 数或并行化。
 
 调试中遇到的 `No valid instructions found` 已通过 task name fallback patch 规避;`ffmpeg` 缺失是录像依赖,
 不是主链路 blocker。
+
+### 0.1 已验证跑通结果与速度
+
+2026-06-20,`RoboTwinHy26` 环境在 H20 上已经完成 `adjust_bottle` 的 Hy-VLA eval:
+
+```text
+环境: /home/jovyan/miniconda3/envs/RoboTwinHy26
+代码: /home/jovyan/code/wge/ttt_drift @ f03505d
+RoboTwin: /home/jovyan/code/wge/RoboTwin_hy
+torch: 2.6.0+cu124
+warp: 1.11.1
+curobo: /home/jovyan/code/wge/RoboTwin_hy/envs/curobo/src/curobo
+结果: Success rate: 1/1 => 100.0%
+```
+
+稳定跑通使用的关键开关:
+
+```bash
+HYVLA_REQUIRE_SOURCE_CUROBO=1
+HYVLA_PATCH_ROBOTWIN_TRACEBACK=1
+HYVLA_PATCH_CUROBO_NO_GRAPH=1
+HYVLA_PATCH_CUROBO_DISABLE_LBFGS_KERNEL=1
+```
+
+速度记录:
+
+- 默认 expert precheck 开启:`TEST_NUM=1` 单 rollout 约 **9m13s**。
+- `HYVLA_PATCH_SKIP_EXPERT_CHECK=1` 后:单 rollout 约 **7m46s**。
+- 跳过 expert 只省约 **1m27s**(约 16%),说明主要耗时不在 expert precheck,而在真实
+  Hy-VLA rollout + `action_type="ee"` 的 cuRobo 规划/执行。
+- 当前速度适合 smoke/regression,不适合全量 benchmark。慢的主要代价来自稳定性 workaround:
+  `cuRobo graph disabled` 和 `LBFGS CUDA kernel disabled`。
+
+外部速度调研结论:
+
+- RoboTwin 2.0 官方论文/文档公开的是评测规模和成功率,没有找到可靠的单 rollout wall-clock baseline。
+  官方论文说明 benchmark 使用 Aloha-AgileX,每个 policy 在 50 个任务上评测,每个任务在 Easy/Hard
+  两种条件下各 100 rollouts[^robotwin-paper-eval]。
+- Hugging Face/LeRobot 的 RoboTwin 2.0 文档只给出安装耗时约 20 分钟,没有给 eval wall-clock
+  指标[^hf-robotwin-install]。
+- X-VLA 的 RoboTwin-2.0 eval 采用 server/client 方式跑模型和仿真,并说明 episode 数等可配置,
+  但也没有公开每个 rollout 的耗时[^xvla-eval]。
+- 因此不能把我们这次 7m46s/rollout 直接和公开榜单速度做一一对比。只能判断:如果按官方全量
+  50 tasks × 100 rollouts × Easy/Hard 串行跑,当前速度量级会非常慢;后续若要大规模评测,必须做
+  速度优化、减少 rollout 数或多 GPU/多进程并行。
+
+[^robotwin-paper-eval]: RoboTwin 2.0 paper, Sec. 4.5: https://arxiv.org/html/2506.18088v1
+[^hf-robotwin-install]: Hugging Face LeRobot RoboTwin 2.0 docs: https://huggingface.co/docs/lerobot/main/robotwin
+[^xvla-eval]: X-VLA RoboTwin-2.0 evaluation README: https://github.com/2toinf/X-VLA/blob/main/evaluation/robotwin-2.0/README.md
 
 ---
 
@@ -383,10 +434,14 @@ RLinf .venv:
 - **H20 这张卡/这个 Docker 可以跑 RoboTwin。**
 - 旧 `h20_fail.md` 的固件级定性已经过期。
 - Hy-VLA policy 本身已能 load 并产出 finite `(16,)` action。
-- 当前 blocker 是 `RoboTwinHy` 的 cuRobo 执行 EE action 时在 H20 上触发 CUDA illegal instruction。
+- 原 blocker 是 `RoboTwinHy` 的 cuRobo 执行 EE action 时在 H20 上触发 CUDA illegal instruction;
+  当前已通过 `RoboTwinHy26` + torch2.6/cu124 + warp1.11 + RoboTwin source cuRobo + no-graph/LBFGS
+  workaround 跑通。
 - 不要继续 patch torch2.4/cu121/warp1.12/source-curobo 这条旧环境;下一步应新建独立环境,复制 RLinf 已验证的
   torch2.6/cu124/warp1.11 方向,但 cuRobo 仍需使用 RoboTwin_hy 旧 API source 版本。site-packages
   `nvidia-curobo` v0.8/v2 会和 RoboTwin_hy planner 的 `curobo.types.math` 旧导入不兼容。
+- 当前剩余问题是速度:单 rollout 约 7-9 分钟,跳过 expert precheck 只节省约 1m27s,说明主要耗时在
+  真实 Hy-VLA rollout + EE cuRobo 规划。
 
 已补一个保守入口:`scripts/setup_robotwin_hy26_stack.sh`。它默认 clone
 `RoboTwinHy -> RoboTwinHy26`,替换 torch/warp/SAPIEN/mplib,重装 RoboTwin source cuRobo 并做 import

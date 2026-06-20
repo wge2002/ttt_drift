@@ -102,11 +102,10 @@ python scripts/diag_step0_mask.py --ckpt ./ckpts/Hy-VLA-RoboTwin --out step0_mas
   RoboTwin rollout。
 - Hy 模型也不是当前主问题:checkpoint 能加载,policy 已进入推理,并且已经看到
   `[Hy-VLA] action summary: shape=(16,) ... finite=True`。
-- 剩余主 blocker 是 `TASK_ENV.take_action(action_type="ee") -> curobo` 的 CUDA illegal instruction。
-  这条路径在当前 `RoboTwinHy` 的 `torch 2.4.1+cu121 / warp 1.12.0 / RoboTwin_hy source curobo`
-  栈上不稳;RLinf 的可用对照是 `torch 2.6.0+cu124 / warp 1.11.1 / site-packages nvidia-curobo`。
-- 因此下一步先等确认。如果继续,优先新建隔离 conda env 复刻 RLinf 的关键 torch/cuRobo/warp 栈,
-  不直接改 RLinf `.venv`。
+- 原主 blocker 是 `TASK_ENV.take_action(action_type="ee") -> curobo` 的 CUDA illegal instruction。
+  当前已通过 `RoboTwinHy26`、`torch 2.6.0+cu124`、`warp 1.11.1`、RoboTwin source cuRobo,
+  以及 no-graph/LBFGS workaround 跑通。
+- 当前剩余问题是速度:1 rollout 约 7-9 分钟,适合 smoke/regression,不适合串行全量 benchmark。
 
 ```bash
 # 系统库。如果已装过,apt 会直接跳过。
@@ -386,6 +385,19 @@ bash scripts/eval_robotwin_test.sh
 注意:`scripts/eval_robotwin_test.sh` 会默认 patch RoboTwin 的 `script/eval_policy.py`,把上游写死的
 `test_num = 100` 改成读取命令行 `--test_num`。否则即使 wrapper banner 显示 `Rollouts/task : 1`,
 RoboTwin 内部仍会继续跑到 `2/2`、`3/3` 甚至更多。
+
+已验证速度结论(2026-06-20,H20,`adjust_bottle`,1 rollout):
+
+```text
+expert precheck default : ~9m13s, Success rate 1/1
+skip expert precheck   : ~7m46s, Success rate 1/1
+```
+
+因此 H20/RoboTwin_hy/Hy-VLA 链路已经跑通;当前问题从“能不能跑”变成“速度如何优化”。跳过 expert
+只节省约 1m27s,主要耗时仍在真实 policy rollout + `action_type="ee"` cuRobo 规划。公开资料中
+RoboTwin 2.0 主要报告评测规模/成功率,没有找到可靠单 rollout wall-clock baseline;官方论文的全量
+设置是 50 tasks × 100 rollouts × Easy/Hard,所以当前 7-9 分钟/rollout 适合 smoke/regression,
+不适合串行全量 benchmark。后续若要大规模跑,需要优化 cuRobo workaround、减少 rollout 数或并行化。
 
 脚本内部等价做法是 clone 当前 `RoboTwinHy` 以保留 RoboTwin/SAPIEN 其他依赖,然后只替换关键
 torch/warp 栈并重装 RoboTwin source cuRobo:
